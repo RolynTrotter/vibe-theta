@@ -272,7 +272,13 @@ def cmd_plan(a):
     kind = leg["kind"]
 
     chain = [r for r in snap["chain"] if r.get("iv") and r["iv"] > 0]
-    smile = px.Smile(spx, [(r["strike"], r["iv"]) for r in chain])
+    pts = [(r["strike"], r["iv"]) for r in chain]
+    nearest = min((abs(k / spx - 1) for k, _ in pts), default=1)
+    if nearest > 0.005 and snap["spy"].get("iv"):
+        # the chain stops short of spot: anchor at-the-money vol with the index's
+        # own implied vol so the density chart isn't flattened by OTM skew
+        pts.append((spx, snap["spy"]["iv"]))
+    smile = px.Smile(spx, pts)
     stop_mult = leg["stop_mult"]
     tick = cfg["costs"]["tick"]
     comm = cfg["costs"]["commission_per_contract"]
@@ -473,7 +479,13 @@ def cmd_gate(a):
         ob = Outbox(a.outbox)
         ob.put("plans", plan["plan_id"], plan)
         ob.save()
-    print(json.dumps({"gate": plan["gate"], "decisions": plan["decisions"]}, indent=1))
+    want = cfg.get("approvals", {}).get("stage_ibkr", "off")
+    passed = plan["gate"]["pass"] and not plan["hard_rules_failed"]
+    nxt = (f"plan passed: stage_ibkr={want}. Run `stage --mode {want}`, create the IBKR instruction, "
+           "then `link --instruction-id ... --ibkr-url ...`") if passed and want != "off" else \
+          ("plan passed: run `link --dashboard ...` (no IBKR staging)" if passed else
+           "plan did not pass: run `link` with no links; notification without click-through")
+    print(json.dumps({"gate": plan["gate"], "decisions": plan["decisions"], "approval_next": nxt}, indent=1))
 
 
 def cmd_fill(a):
@@ -805,11 +817,19 @@ def cmd_link(a):
     """Record the approval links (or their absence) on the plan."""
     plan = load(a.plan)
     passed = bool(plan.get("gate", {}) and plan["gate"].get("pass")) and not plan["hard_rules_failed"]
+    want = load(a.state)["config"].get("approvals", {}).get("stage_ibkr", "off")
+    staging = a.staging or want
+    if passed and want != "off" and not a.instruction_id:
+        sys.exit(f"config says stage_ibkr={want}: run `stage --mode {want}`, call "
+                 "create_order_instruction with its instruction block, then re-run link "
+                 "with --instruction-id and --ibkr-url from the result.")
+    if passed and staging != want:
+        sys.exit(f"--staging {staging} does not match config stage_ibkr={want}")
     plan["approval"] = {
         "status": "pending" if passed else "no-click-through",
         "gate_pass": passed, "dashboard": a.dashboard if passed else None,
         "ibkr_url": a.ibkr_url if passed else None, "instruction_id": a.instruction_id,
-        "staging": a.staging, "created": datetime.now(px.ET).isoformat(),
+        "staging": staging if passed else "none", "created": datetime.now(px.ET).isoformat(),
     }
     dump(plan, a.plan)
     ob = Outbox(a.outbox)
@@ -847,7 +867,7 @@ def main():
     s.add_argument("--out", default="jev_in.json"); s.set_defaults(f=cmd_jev_input)
     s = sp.add_parser("link", parents=[common]); s.add_argument("--plan", default="plan.json")
     s.add_argument("--dashboard"); s.add_argument("--ibkr-url", dest="ibkr_url")
-    s.add_argument("--instruction-id", dest="instruction_id"); s.add_argument("--staging", default="off")
+    s.add_argument("--instruction-id", dest="instruction_id"); s.add_argument("--staging")
     s.set_defaults(f=cmd_link)
     a = ap.parse_args()
     a.f(a)

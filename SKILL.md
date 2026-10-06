@@ -123,7 +123,7 @@ gut-checked portfolio, Jev passed. A rejected day still gets a notification, but
 no links, so acting on it takes deliberate effort.
 
 When the plan passes:
-1. Staging (`config.approvals.stage_ibkr`):
+1. Staging (`state.json` → `config.approvals.stage_ibkr`; currently `test`):
    - `test`: `python3 scripts/theta.py stage --plan plan.json --mode test` and call
      `create_order_instruction` with its `instruction` block. It BUYS one of the chosen
      puts at $0.05, so even if someone submits it the worst case is owning one far-OTM
@@ -133,7 +133,11 @@ When the plan passes:
      same with `--mode live --portfolio A`; the message must also give the stop-limit
      to attach (`stop_to_attach`) and suggest a `create_alert` at `alert_spx_level`.
    - `off`: no IBKR instruction.
-2. `python3 scripts/theta.py link --plan plan.json --dashboard "<dashboard_url>#<plan_id>" --ibkr-url "<url>" --instruction-id "<id>" --staging test`
+2. `python3 scripts/theta.py link --plan plan.json --dashboard "<dashboard_url>#<plan_id>" --ibkr-url "<url>" --instruction-id "<id>"`
+
+   `link` reads `stage_ibkr` from the state's config and refuses to record a passed
+   plan without an instruction id when staging is on. Do not skip staging; `gate`
+   prints the exact next step as `approval_next`.
 
 When it does not pass: `python3 scripts/theta.py link --plan plan.json` (records
 `no-click-through`).

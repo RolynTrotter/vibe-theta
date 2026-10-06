@@ -87,6 +87,7 @@ def main():
     print(run("plan", "--snapshot", "snap2.json", "--out", "plan2.json", cwd=d))
     w("jev_no.json", [{"id": "x", "answers": {"ok": {"type": "noul", "noul": 0.2}}}])
     print(run("gate", "--plan", "plan2.json", "--jev", "jev_no.json", cwd=d))
+    print(run("link", "--plan", "plan2.json", cwd=d))
     print(run("fill", "--plan", "plan2.json", cwd=d))
     print(run("stage", "--plan", "plan2.json", "--mode", "test", cwd=d))
 
