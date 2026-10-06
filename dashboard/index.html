@@ -66,6 +66,10 @@ section.panel { background: var(--panel); border: 1px solid var(--rule); border-
 .kv div span { display: block; font-size: 0.72rem; color: var(--ink-3); text-transform: uppercase; letter-spacing: 0.06em; }
 .kv div b { font-family: var(--font-data); font-weight: 500; font-size: 1rem; font-variant-numeric: tabular-nums; }
 .brief { font-size: 0.88rem; color: var(--ink-2); max-width: 70ch; }
+.hl { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 0.82rem; max-width: 80ch; }
+.hl li { display: grid; grid-template-columns: 3em 1fr; gap: 8px; color: var(--ink-2); }
+.hl li > span:last-child { min-width: 0; }
+.hl li.veto { color: var(--bad); font-weight: 600; }
 .approval { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 12px; border-radius: 6px; background: var(--chip-neutral-bg); }
 button, .btn { font: inherit; font-weight: 600; font-size: 0.88rem; border-radius: 6px; padding: 8px 14px; cursor: pointer; border: 1px solid var(--accent); text-decoration: none; display: inline-block; }
 button.primary { background: var(--accent); color: var(--accent-ink); }
@@ -203,9 +207,14 @@ td.bad { color: var(--bad); } td.good { color: var(--good); }
     const c = p.chosen;
     const g = p.gate || {};
     const passed = p.approval && p.approval.gate_pass;
-    const gateChip = g.p_ok == null ? '<span class="chip bad"><span class="dot"></span>gut check unavailable</span>'
-      : g.pass ? `<span class="chip good"><span class="dot"></span>gut check ${g.p_ok.toFixed(2)} · ok</span>`
-      : `<span class="chip bad"><span class="dot"></span>gut check ${g.p_ok.toFixed(2)} · no</span>`;
+    const marketOk = g.market_ok != null ? g.market_ok : g.pass;
+    const gateChip = g.p_ok == null ? '<span class="chip bad"><span class="dot"></span>market check unavailable</span>'
+      : `<span class="chip ${marketOk ? "good" : "bad"}"><span class="dot"></span>market ${g.p_ok.toFixed(2)} · ${marketOk ? "ok" : "no"}</span>`;
+    const hs = g.headline_scores || [];
+    const vetoN = hs.filter((x) => x.veto).length;
+    const hlChip = !hs.length ? "" : `<span class="chip ${vetoN ? "bad" : "good"}"><span class="dot"></span>${vetoN ? vetoN + " headline veto" + (vetoN > 1 ? "es" : "") : "headlines ok"}</span>`;
+    const hlList = !hs.length ? "" : `<ul class="hl">${hs.map((x) =>
+      `<li class="${x.veto ? "veto" : ""}"><span class="mono">${x.shock == null ? "–" : x.shock.toFixed(2)}</span><span>${esc(x.text)}</span></li>`).join("")}</ul>`;
     const rules = (p.hard_rules_failed || []).length
       ? `<span class="chip bad"><span class="dot"></span>${esc(p.hard_rules_failed[0])}</span>` : '<span class="chip good"><span class="dot"></span>rules pass</span>';
     const dec = Object.entries(p.decisions || {}).map(([k, d]) =>
@@ -215,7 +224,7 @@ td.bad { color: var(--bad); } td.good { color: var(--good); }
     if (!p.approval) {
       approval = "";
     } else if (!passed) {
-      approval = `<div class="approval"><span class="sub">No approval link today: ${esc(g.pass ? "a hard rule failed" : "the gut check said no")}. Portfolio B still traded on paper.</span></div>`;
+      approval = `<div class="approval"><span class="sub">No approval link today: ${esc(g.pass ? "a hard rule failed" : !marketOk ? "the market check said no" : "a headline vetoed the trade")}. Portfolio B still traded on paper.</span></div>`;
     } else {
       const ibkr = p.approval.ibkr_url ? `<a class="btn" href="${esc(p.approval.ibkr_url)}" target="_blank" rel="noopener">Open IBKR instruction${p.approval.staging === "test" ? " (test)" : ""}</a>` : "";
       const done = a ? `<span class="chip ${a.decision === "approve" ? "good" : "bad"}">${a.decision === "approve" ? "approved" : "passed"} ${new Date(a.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>` : "";
@@ -241,9 +250,10 @@ td.bad { color: var(--bad); } td.good { color: var(--good); }
         <h3>${legName(p.leg)} · expires ${esc(p.expiry)}</h3>
         <span class="sub mono">SPX ${p.spx?.toLocaleString()} · ${esc(p.quote_status || "")}</span>
       </div>
-      <div class="row">${gateChip}${rules}${dec}</div>
+      <div class="row">${gateChip}${hlChip}${rules}${dec}</div>
       ${kv}
-      <div class="brief">${esc(p.brief)}${g.events ? " Scheduled: " + esc(g.events) + "." : ""}</div>
+      <div class="brief">${esc(p.brief)}${g.events ? " Scheduled: " + esc(String(g.events).replace(/\.+$/, "")) + "." : ""}</div>
+      ${hlList}
       ${approval}
     </div>`;
   }

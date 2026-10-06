@@ -70,7 +70,20 @@ def main():
     w("snap1.json", snap)
     print(run("plan", "--snapshot", "snap1.json", "--out", "plan1.json", cwd=d))
     w("jev_ok.json", [{"id": "x", "answers": {"ok": {"type": "noul", "noul": 0.66}}}])
-    print(run("gate", "--plan", "plan1.json", "--jev", "jev_ok.json", cwd=d))
+    # headline veto: market check passes, one headline scores as a shock
+    print(run("jev-input", "--plan", "plan1.json", "--events", "Nothing major.",
+              "--headline", "Record highs again", "--headline", "China launches amphibious assault on Taiwan", cwd=d))
+    w("jev_hl.json", [{"id": "h1", "answers": {"shock": {"type": "noul", "noul": 0.1}}},
+                      {"id": "h2", "answers": {"shock": {"type": "noul", "noul": 0.88}}}])
+    out = run("gate", "--plan", "plan1.json", "--jev", "jev_ok.json", "--jev-headlines", "jev_hl.json",
+              "--headline", "Record highs again", "--headline", "China launches amphibious assault on Taiwan", cwd=d)
+    g = json.loads(out)
+    assert g["decisions"]["A"]["trade"] is False and "headline veto" in g["decisions"]["A"]["reason"], g
+    assert g["decisions"]["B"]["trade"] is True
+    # all calm: both trade
+    w("jev_hl.json", [{"id": "h1", "answers": {"shock": {"type": "noul", "noul": 0.1}}}])
+    print(run("gate", "--plan", "plan1.json", "--jev", "jev_ok.json", "--jev-headlines", "jev_hl.json",
+              "--headline", "Record highs again", cwd=d))
     print(run("fill", "--plan", "plan1.json", cwd=d))
     print(run("decum", "--snapshot", "snap1.json", cwd=d))
 

@@ -446,28 +446,57 @@ def make_brief(snap, spx, chosen, leg_name, now, rows):
     return " ".join(lines)
 
 
+def _answer(item, qid):
+    ans = item.get("answers", {}).get(qid, {})
+    return ans.get("noul", ans.get("yes", ans.get("p")))
+
+
 def cmd_gate(a):
     plan = load(a.plan)
     state = load(a.state)
     cfg = state["config"]
+    g = gate_config()
+    notes = []
     p_ok = None
     if a.jev:
         res = load(a.jev)
-        item = res[0] if isinstance(res, list) else res
-        ans = item.get("answers", {}).get("ok", {})
-        p_ok = ans.get("noul", ans.get("yes", ans.get("p")))
-    thr = cfg["gate"]["threshold"]
-    plan["gate"] = {"p_ok": p_ok, "threshold": thr,
-                    "pass": (p_ok is not None and p_ok >= thr),
-                    "events": a.events, "headlines": a.headlines,
-                    "note": None if p_ok is not None else "classifier unavailable: treated as reject"}
+        p_ok = _answer(res[0] if isinstance(res, list) else res, "ok")
+    if p_ok is None:
+        notes.append("market check unavailable: treated as reject")
+    hs = _headline_list(a)
+    scored = []
+    if hs:
+        res = load(a.jev_headlines) if a.jev_headlines and os.path.exists(a.jev_headlines) else []
+        by_id = {r.get("id"): _answer(r, "shock") for r in res}
+        for i, h in enumerate(hs):
+            sc = by_id.get(f"h{i + 1}")
+            scored.append({"text": h, "shock": sc, "veto": sc is None or sc >= g["shock_veto"]})
+        if any(x["shock"] is None for x in scored):
+            notes.append("headline check unavailable: treated as veto")
+    else:
+        notes.append("no headlines were checked")
+    vetoes = [x for x in scored if x["veto"]]
+    market_ok = p_ok is not None and p_ok >= g["threshold"]
+    plan["gate"] = {"p_ok": p_ok, "threshold": g["threshold"], "market_ok": market_ok,
+                    "headline_scores": scored, "shock_veto": g["shock_veto"],
+                    "max_shock": max((x["shock"] for x in scored if x["shock"] is not None), default=None),
+                    "pass": market_ok and not vetoes,
+                    "events": a.events, "headlines": " | ".join(hs),
+                    "note": "; ".join(notes) or None}
+    if not market_ok:
+        why = f"gut check said no (market p={p_ok})"
+    elif vetoes:
+        v = max(vetoes, key=lambda x: x["shock"] if x["shock"] is not None else 2)
+        why = f"headline veto: \"{v['text']}\" (shock {v['shock']})"
+    else:
+        why = None
     for k, p in state["portfolios"].items():
         if plan["hard_rules_failed"]:
             d = {"trade": False, "reason": "; ".join(plan["hard_rules_failed"])}
         elif plan["sizing"].get(k, {}).get("qty", 0) == 0:
             d = {"trade": False, "reason": plan["sizing"].get(k, {}).get("note", "size 0")}
         elif p["uses_gate"] and not plan["gate"]["pass"]:
-            d = {"trade": False, "reason": f"gut check said no (p={p_ok})"}
+            d = {"trade": False, "reason": why}
         else:
             d = {"trade": True, "reason": "rules pass" + (" and gut check passed" if p["uses_gate"] else "")}
         plan["decisions"][k] = d
@@ -497,7 +526,7 @@ def cmd_fill(a):
     for k, p in state["portfolios"].items():
         d = plan["decisions"].get(k, {})
         if not d.get("trade"):
-            key = "skipped_gate" if "gut check" in d.get("reason", "") else "skipped_rules"
+            key = "skipped_gate" if ("gut check" in d.get("reason", "") or "headline veto" in d.get("reason", "")) else "skipped_rules"
             p["counts"][key] += 1
             continue
         qty = plan["sizing"][k]["qty"]
@@ -794,20 +823,37 @@ def cmd_report(a):
             print(f"   {y}: {r}")
 
 
+def gate_config():
+    """Gate wording and thresholds come from the repo config, not the stored state."""
+    return load_config(ROOT / "config.local.json")["gate"]
+
+
+def _headline_list(a):
+    hs = list(a.headline or [])
+    if a.headlines:
+        hs += [h.strip() for h in a.headlines.split(" | ")]
+    return [h for h in hs if h]
+
+
 def cmd_jev_input(a):
-    """Build the classifier request from the plan brief plus events/headlines."""
+    """Write two classifier requests: the market brief (one question) and the
+    headlines (each scored on its own for crash potential)."""
     plan = load(a.plan)
-    g = load(a.state)["config"]["gate"]
+    g = gate_config()
+    session = "afternoon" if plan["leg"].startswith("1dte") else "morning"
     text = plan["brief"]
     if a.events:
-        text += f" Scheduled today: {a.events}."
-    if a.headlines:
-        text += f" Headlines: {a.headlines}"
-    req = {"ask": {"ok": {"q": g["question"], "yes": g["yes"], "no": g["no"]}},
-           "context": {"reader": "a cautious trader who sells far out-of-the-money S&P 500 index options for small daily premiums and fears crash days"},
-           "items": [{"id": plan["plan_id"], "text": text}], "show": "json"}
-    dump(req, a.out)
-    print(text)
+        text += " Scheduled before expiry: " + a.events.strip().rstrip(".") + "."
+    market = {"ask": {"ok": {"q": g["question"].format(session=session), "yes": g["yes"], "no": g["no"]}},
+              "items": [{"id": plan["plan_id"], "text": text}], "show": "json"}
+    dump(market, a.out)
+    hs = _headline_list(a)
+    if hs:
+        dump({"ask": {"shock": {"q": g["shock_question"], "yes": g["shock_yes"], "no": g["shock_no"]}},
+              "items": [{"id": f"h{i + 1}", "text": h} for i, h in enumerate(hs)], "show": "json"},
+             a.out_headlines)
+    print(json.dumps({"market_text": text, "headlines": hs,
+                      "files": [a.out] + ([a.out_headlines] if hs else [])}, indent=1))
 
 
 def cmd_link(a):
@@ -848,7 +894,9 @@ def main():
     s = sp.add_parser("plan", parents=[common]); s.add_argument("--snapshot", required=True)
     s.add_argument("--out", default="plan.json"); s.set_defaults(f=cmd_plan)
     s = sp.add_parser("gate", parents=[common]); s.add_argument("--plan", default="plan.json")
-    s.add_argument("--jev"); s.add_argument("--events", default=""); s.add_argument("--headlines", default="")
+    s.add_argument("--jev"); s.add_argument("--jev-headlines", dest="jev_headlines", default="jev_headlines.json")
+    s.add_argument("--events", default=""); s.add_argument("--headlines", default="")
+    s.add_argument("--headline", action="append")
     s.set_defaults(f=cmd_gate)
     s = sp.add_parser("fill", parents=[common]); s.add_argument("--plan", default="plan.json"); s.set_defaults(f=cmd_fill)
     s = sp.add_parser("decum", parents=[common]); s.add_argument("--snapshot", required=True); s.set_defaults(f=cmd_decum)
@@ -861,7 +909,10 @@ def main():
     s = sp.add_parser("report", parents=[common]); s.set_defaults(f=cmd_report)
     s = sp.add_parser("jev-input", parents=[common]); s.add_argument("--plan", default="plan.json")
     s.add_argument("--events", default=""); s.add_argument("--headlines", default="")
-    s.add_argument("--out", default="jev_in.json"); s.set_defaults(f=cmd_jev_input)
+    s.add_argument("--headline", action="append")
+    s.add_argument("--out", default="jev_in.json")
+    s.add_argument("--out-headlines", dest="out_headlines", default="jev_in_headlines.json")
+    s.set_defaults(f=cmd_jev_input)
     s = sp.add_parser("link", parents=[common]); s.add_argument("--plan", default="plan.json")
     s.add_argument("--dashboard"); s.add_argument("--ibkr-url", dest="ibkr_url")
     s.add_argument("--instruction-id", dest="instruction_id"); s.add_argument("--staging")

@@ -8,7 +8,8 @@ description: Runs the far-OTM SPX theta-harvest experiment (ERN-style 0DTE and o
 Paper-trades Early Retirement Now's short-dated SPX put selling in two portfolios that
 differ only in the gut check:
 
-- **A, Gut-checked**: trades only when the Jev classifier says the day feels ordinary.
+- **A, Gut-checked**: trades only when the Jev classifier says the market looks ordinary
+  and no headline scores as a likely next-day crash.
 - **B, Always**: trades whenever the hard rules pass.
 
 Both start with 900 AAPL (stepped-up basis = starting price unless `config.local.json`
@@ -71,15 +72,24 @@ Map to `spy: {last, prior_close, open, iv (annual_iv), hv30, iv_pctile_52w (52-w
    - If it prints `refine` strikes, snapshot the puts for those that exist in the
      `get_option_data` result, append them to the chain and re-run `plan`.
    - If `rules_failed` says to extend the chain, fetch lower strikes and re-run.
-6. Gut check inputs: WebSearch for today's US economic calendar (Fed decision, CPI,
-   PPI, jobs report, major earnings that move the index) and for market news this
-   morning. Write one sentence of scheduled events and 2 to 4 short neutral headlines
-   in your own words. Do not tell Jev what the rules or prices decided.
-7. `python3 scripts/theta.py jev-input --plan plan.json --events "..." --headlines "..."`
-   then `python3 /mnt/skills/plugins/vibe-classification/scripts/jev.py < jev_in.json > jev.json`.
-   If Jev fails, continue without `--jev` (A is then treated as a reject and the
-   notification says why).
-8. `python3 scripts/theta.py gate --plan plan.json --jev jev.json --events "..." --headlines "..."`
+6. Gut check inputs: WebSearch for the US economic calendar between now and the
+   option's expiry (Fed decision, CPI, PPI, jobs report, major index-moving earnings),
+   and for the top market and world news right now. Write one plain sentence of
+   scheduled events. Collect 3 to 6 headlines, copied as they appear in the search
+   results (trim site names, don't reword or add commentary). Never pass the plan's
+   numbers or decisions to Jev beyond what `jev-input` builds.
+7. `python3 scripts/theta.py jev-input --plan plan.json --events "..." --headline "..." --headline "..."`
+   writes two requests. Run both:
+   `python3 /mnt/skills/plugins/vibe-classification/scripts/jev.py < jev_in.json > jev.json`
+   `python3 /mnt/skills/plugins/vibe-classification/scripts/jev.py < jev_in_headlines.json > jev_headlines.json`
+   - `jev_in.json` asks one question about the market brief plus scheduled events.
+   - `jev_in_headlines.json` scores each headline on its own: could this event make
+     US stocks fall sharply within a day? Any headline at or above `shock_veto` (0.7)
+     vetoes the gut-checked portfolio.
+   If a Jev call fails, still run `gate`: a missing market answer is a reject, and a
+   missing headline answer is a veto. The notification says why.
+8. `python3 scripts/theta.py gate --plan plan.json --jev jev.json --jev-headlines jev_headlines.json --events "..." --headline "..." --headline "..."`
+   (the same events and headlines as step 7, in the same order).
 9. `python3 scripts/theta.py fill --plan plan.json --state-version V` (paper fills, both portfolios).
 10. Approval pipeline (below), then send the outbox, then notify.
 
