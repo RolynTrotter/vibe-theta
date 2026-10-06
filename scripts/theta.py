@@ -440,9 +440,6 @@ def make_brief(snap, spx, chosen, leg_name, now, rows):
         lines.append(f"That is {_words_level(s['iv_pctile_52w'], [0.2, 0.5, 0.8, 0.95], ['near the bottom of', 'in the lower half of', 'in the upper half of', 'near the top of', 'at the very top of'])} its one-year range.")
     if s.get("hv30"):
         lines.append(f"Realized volatility over the last month was {_words_level(s['hv30'], [0.10, 0.15, 0.22, 0.32], ['very calm', 'calm', 'normal', 'choppy', 'turbulent'])}.")
-    a_ = snap.get("aapl", {})
-    if a_.get("prior_close"):
-        lines.append(f"Apple is {_words_move((a_['last'] / a_['prior_close'] - 1) * 100)}.")
     when = "this afternoon to hold overnight" if leg_name.startswith("1dte") else "this morning, expiring today"
     if chosen:
         lines.append(f"The planned trade sells a put about {chosen['otm_pct']:.1f}% below the index {when}.")
