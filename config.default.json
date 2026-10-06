@@ -1,0 +1,114 @@
+{
+  "start": {
+    "aapl_shares": 900,
+    "aapl_basis": null,
+    "sleeve_usd": 50000
+  },
+  "portfolios": {
+    "A": {
+      "name": "Gut-checked",
+      "uses_gate": true
+    },
+    "B": {
+      "name": "Always",
+      "uses_gate": false
+    }
+  },
+  "legs": {
+    "0dte_put": {
+      "enabled": true,
+      "kind": "P",
+      "dte": 0,
+      "min_otm_pct": 3.0,
+      "target_bid": 0.1,
+      "min_bid": 0.05,
+      "stop_mult": 10,
+      "limit_ticks": 3,
+      "max_notional_x": 2.25,
+      "stop_min": 0.75
+    },
+    "1dte_put": {
+      "enabled": true,
+      "kind": "P",
+      "dte": 1,
+      "min_otm_pct": 5.0,
+      "target_bid": 0.15,
+      "min_bid": 0.05,
+      "stop_mult": 10,
+      "limit_ticks": 3,
+      "max_notional_x": 2.5,
+      "stop_min": 1.0
+    },
+    "0dte_call": {
+      "enabled": false,
+      "kind": "C",
+      "dte": 0,
+      "min_otm_pct": 1.5,
+      "target_bid": 0.1,
+      "min_bid": 0.05,
+      "stop_mult": 10,
+      "limit_ticks": 3,
+      "max_notional_x": 2.0,
+      "stop_min": 0.75
+    }
+  },
+  "sizing": {
+    "max_total_notional_x": 4.75,
+    "min_margin_excess_pct": 25
+  },
+  "costs": {
+    "commission_per_contract": 1.25,
+    "tick": 0.05,
+    "tick_below_3": 0.05
+  },
+  "stops": {
+    "vol_bump_pts_per_pct": 2.0
+  },
+  "gate": {
+    "threshold": 0.5,
+    "question": "Is this an ordinary morning on which it is reasonable to sell far out-of-the-money S&P 500 index puts?",
+    "yes": "nothing unusual: normal volatility for the times, no major scheduled shock today, no crisis or panic in the headlines",
+    "no": "something is off: a crisis or panic, a major scheduled shock (Fed decision, CPI, jobs report) today, a large overnight gap, or unusual fear"
+  },
+  "sleeve": {
+    "target_usd": 75000
+  },
+  "decum": {
+    "down_day_pct": -2.0,
+    "tranche": 50,
+    "crash_spx_pct": -5.0,
+    "crash_tranche": 150,
+    "min_per_year": 200
+  },
+  "margin": {
+    "index_stress_pct": -8.0,
+    "stress_vol_pts": 10.0,
+    "stock_pct": 15.0,
+    "concentrated_pct": 30.0,
+    "concentration_share": 0.4,
+    "index_etf_pct": 8.0,
+    "tbill_pct": 1.0
+  },
+  "crash": {
+    "scenarios_pct": [
+      -5,
+      -7,
+      -10,
+      -15,
+      -20
+    ],
+    "aapl_beta": 1.3
+  },
+  "contracts": {
+    "SPX": 416904,
+    "SPY": 756733,
+    "AAPL": 265598,
+    "SGOV": 424099317
+  },
+  "spx_spy_ratio": 10.02,
+  "approvals": {
+    "stage_ibkr": "test",
+    "note": "test = stage a non-marketable 1-lot instruction and delete it at the close run; live = stage the real order (live mode only); off = dashboard button only"
+  },
+  "mode": "paper"
+}
