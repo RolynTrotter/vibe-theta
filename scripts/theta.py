@@ -505,7 +505,7 @@ def cmd_gate(a):
         ob = Outbox(a.outbox)
         ob.put("plans", plan["plan_id"], plan)
         ob.save()
-    want = cfg.get("approvals", {}).get("stage_ibkr", "off")
+    want = load_config(ROOT / "config.local.json").get("approvals", {}).get("stage_ibkr", "off")
     passed = plan["gate"]["pass"] and not plan["hard_rules_failed"]
     nxt = (f"plan passed: stage_ibkr={want}. Run `stage --mode {want}`, create the IBKR instruction, "
            "then `link --instruction-id ... --ibkr-url ...`") if passed and want != "off" else \
@@ -860,7 +860,7 @@ def cmd_link(a):
     """Record the approval links (or their absence) on the plan."""
     plan = load(a.plan)
     passed = bool(plan.get("gate", {}) and plan["gate"].get("pass")) and not plan["hard_rules_failed"]
-    want = load(a.state)["config"].get("approvals", {}).get("stage_ibkr", "off")
+    want = load_config(ROOT / "config.local.json").get("approvals", {}).get("stage_ibkr", "off")
     staging = a.staging or want
     if passed and want != "off" and not a.instruction_id:
         sys.exit(f"config says stage_ibkr={want}: run `stage --mode {want}`, call "

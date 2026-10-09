@@ -91,7 +91,8 @@ Map to `spy: {last, prior_close, open, iv (annual_iv), hv30, iv_pctile_52w (52-w
 8. `python3 scripts/theta.py gate --plan plan.json --jev jev.json --jev-headlines jev_headlines.json --events "..." --headline "..." --headline "..."`
    (the same events and headlines as step 7, in the same order).
 9. `python3 scripts/theta.py fill --plan plan.json --state-version V` (paper fills, both portfolios).
-10. Approval pipeline (below), then send the outbox, then notify.
+10. Approval pipeline (below), then send the outbox, then notify only if
+    `notify.enabled` is true (see Notifications).
 
 ## Afternoon run, ~3:01 PM ET: overnight put + AAPL decumulation
 
@@ -104,7 +105,7 @@ afternoon headlines. After `fill`:
 
 Decumulation is identical in both portfolios and is not gated: a tranche on AAPL
 down-days or below basis, a bigger tranche on crash days or after a stop-out, and a
-pace backstop. Mention any sale in the notification.
+pace backstop. Sales show on the dashboard tape (and in the notification when notify is on).
 
 ## Close run, ~4:20 PM ET: stops, settlement, sweep, mark
 
@@ -123,8 +124,8 @@ pace backstop. Mention any sale in the notification.
    `get_order_instructions` and `delete_order_instruction` every test instruction this
    skill staged (a 1-lot BUY at $0.05 on an SPXW put), from today or earlier. Never
    delete anything else. Report what was deleted.
-6. Send the outbox. Notify only if something happened: a stop, an in-the-money
-   settlement, a forced sale, or a decumulation sale.
+6. Send the outbox. Notify only if `notify.enabled` is true and something happened: a
+   stop, an in-the-money settlement, a forced sale, or a decumulation sale.
 
 ## Approval pipeline
 
@@ -133,7 +134,8 @@ gut-checked portfolio, Jev passed. A rejected day still gets a notification, but
 no links, so acting on it takes deliberate effort.
 
 When the plan passes:
-1. Staging (`state.json` → `config.approvals.stage_ibkr`; currently `test`):
+1. Staging (`approvals.stage_ibkr` in the repo config; currently `off`, so no IBKR
+   instruction and no IBKR emails):
    - `test`: `python3 scripts/theta.py stage --plan plan.json --mode test` and call
      `create_order_instruction` with its `instruction` block. It BUYS one of the chosen
      puts at $0.05, so even if someone submits it the worst case is owning one far-OTM
@@ -145,7 +147,7 @@ When the plan passes:
    - `off`: no IBKR instruction.
 2. `python3 scripts/theta.py link --plan plan.json --dashboard "<dashboard_url>#<plan_id>" --ibkr-url "<url>" --instruction-id "<id>"`
 
-   `link` reads `stage_ibkr` from the state's config and refuses to record a passed
+   `link` reads `stage_ibkr` from the repo config and refuses to record a passed
    plan without an instruction id when staging is on. Do not skip staging; `gate`
    prints the exact next step as `approval_next`.
 
@@ -154,6 +156,14 @@ When it does not pass: `python3 scripts/theta.py link --plan plan.json` (records
 
 ## Notifications
 
+Check `notify.enabled` in `config.default.json` (overridden by `config.local.json`).
+It is currently **false**: the experiment runs silently. Do not call
+`PushNotification` or `SendUserMessage` on any run, including reject days, stops,
+settlements and Apple sales; everything is on the dashboard. A run that cannot
+complete (a tool error, a failed database write) still ends with a short final
+message describing the failure, which appears only in that run's session.
+
+When `notify.enabled` is true:
 1. `PushNotification` (under 200 characters), for example:
    `Theta 0DTE: sell 7450P @0.10 (4.0% OTM), gut 0.66 OK. Approve in session.` or
    `Theta 0DTE: gut check says NO (0.18), A sits out, B sold 7450P.`

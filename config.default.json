@@ -112,8 +112,12 @@
   },
   "spx_spy_ratio": 10.02,
   "approvals": {
-    "stage_ibkr": "test",
-    "note": "test = stage a non-marketable 1-lot instruction and delete it at the close run; live = stage the real order (live mode only); off = dashboard button only"
+    "stage_ibkr": "off",
+    "note": "Read from the repo config at run time. off = no IBKR instruction (no IBKR emails); test = stage a harmless 1-lot BUY at $0.05 and delete it at the close; live = stage the real order (live mode only)"
   },
-  "mode": "paper"
+  "mode": "paper",
+  "notify": {
+    "enabled": false,
+    "note": "false = silent paper tracking: no PushNotification or SendUserMessage from any run; results live on the dashboard"
+  }
 }
