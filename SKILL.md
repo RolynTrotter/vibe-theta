@@ -71,7 +71,12 @@ Map to `spy: {last, prior_close, open, iv (annual_iv), hv30, iv_pctile_52w (52-w
 5. `python3 scripts/theta.py plan --snapshot snapshot.json --state-version V`
    - If it prints `refine` strikes, snapshot the puts for those that exist in the
      `get_option_data` result, append them to the chain and re-run `plan`.
-   - If `rules_failed` says to extend the chain, fetch lower strikes and re-run.
+   - If `plan` exits with code 3 and prints an `extend` block, the best strike may be
+     further out than the chain you fetched. Call `get_option_data` for that
+     `min_strike`–`max_strike` range, snapshot those puts (every 25 points), append them
+     to the chain and re-run `plan`. Repeat until it exits 0. Only if IBKR lists no lower
+     strikes at all, re-run with `--final`. `gate` and `fill` refuse a plan that still
+     needs extending, so this step cannot be skipped.
 6. Gut check inputs: WebSearch for the US economic calendar between now and the
    option's expiry (Fed decision, CPI, PPI, jobs report, major index-moving earnings),
    and for the top market and world news right now. Write one plain sentence of

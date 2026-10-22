@@ -328,8 +328,14 @@ def cmd_plan(a):
             why = f"furthest strike at least {leg['min_otm_pct']}% OTM with bid >= ${floor_:.2f} ({label})"
             break
     rules = []
-    if chosen and chosen["strike"] == min(r["strike"] for r in rows) and kind == "P":
-        rules.append("chosen strike is the furthest one fetched: extend the chain further OTM and re-plan")
+    extend = None
+    if chosen and chosen["strike"] == min(r["strike"] for r in rows) and kind == "P" and not a.final:
+        # the best strike may lie further out than the chain we were given
+        extend = {"min_strike": int(chosen["strike"] * 0.90 // 25 * 25),
+                  "max_strike": int(chosen["strike"] - 1),
+                  "how": "get_option_data with this range, snapshot those puts (every 25 points), "
+                         "append them to snapshot.json and re-run plan. If IBKR lists no lower "
+                         "strikes, re-run plan with --final."}
     if not leg["enabled"]:
         rules.append("leg disabled in config")
     if chosen is None:
@@ -360,11 +366,17 @@ def cmd_plan(a):
     sizing = {}
     if chosen:
         notional = spx * 100
+        today = now.date().isoformat()
         for k, p in state["portfolios"].items():
             v = nlv(p, quotes, state, now)
-            open_notional = sum(spx * 100 * q["qty"] for q in p["positions"] if q["status"] == "open")
-            leg_open = sum(spx * 100 * q["qty"] for q in p["positions"]
-                           if q["status"] == "open" and q["leg"] == leg_name)
+            # A put that settles at today's close stops being risk before this one starts
+            # mattering, so it doesn't use up room for a later expiry (the 3 PM overnight
+            # leg used to be blocked by the morning 0DTE and last night's put).
+            live = [q for q in p["positions"] if q["status"] == "open"
+                    and not (exp_d.isoformat() > today and q["expiry"] == today)]
+            p_s = dict(p, positions=live)
+            open_notional = sum(spx * 100 * q["qty"] for q in live)
+            leg_open = sum(spx * 100 * q["qty"] for q in live if q["leg"] == leg_name)
             room = min(cfg["sizing"]["max_total_notional_x"] * v["nlv"] - open_notional,
                        leg.get("max_notional_x", 99) * v["nlv"] - leg_open)
             qty = max(int(room // notional), 0)
@@ -372,11 +384,11 @@ def cmd_plan(a):
             while qty > 0:
                 trial = [{"status": "open", "kind": kind, "strike": chosen["strike"], "qty": qty,
                           "expiry": exp_d.isoformat(), "entry_iv": chosen["iv"]}]
-                mr = margin_req(p, quotes, state, now, cfg, trial)
+                mr = margin_req(p_s, quotes, state, now, cfg, trial)
                 if mr["excess_pct"] >= cfg["sizing"]["min_margin_excess_pct"]:
                     break
                 qty -= 1
-            mr = margin_req(p, quotes, state, now, cfg, trial if qty else ())
+            mr = margin_req(p_s, quotes, state, now, cfg, trial if qty else ())
             sizing[k] = {"qty": qty, "nlv": r2(v["nlv"]),
                          "leverage_x": r2((open_notional + qty * notional) / v["nlv"]),
                          "margin_excess_pct_after": r2(mr["excess_pct"]),
@@ -393,7 +405,7 @@ def cmd_plan(a):
         "quote_status": snap.get("quote_status", "unknown"),
         "smile": {"k": [r4(x) for x in smile.k], "v": [r4(x) for x in smile.v]},
         "rows": rows, "chosen": chosen, "choice_rule": why, "hard_rules_failed": rules,
-        "refine_strikes": refine, "sizing": sizing,
+        "refine_strikes": refine, "extend": extend, "sizing": sizing,
         "density": {"x": [r2(x) for x in grid], "rn": [float(f"{d:.4g}") for d in dens_rn],
                     "hist": [float(f"{d:.4g}") for d in dens_h]},
         "brief": brief, "gate": None, "decisions": {}, "fills": {}, "approval": None,
@@ -407,8 +419,11 @@ def cmd_plan(a):
     summary = {"plan_id": plan["plan_id"], "spx": plan["spx"], "chosen": chosen and {
         k: chosen[k] for k in ("strike", "otm_pct", "bid", "iv", "p_itm_rn", "p_itm_hist",
                                "stop_price", "p_touch_hist", "ev_hist")},
-        "qty": {k: v["qty"] for k, v in sizing.items()}, "rules_failed": rules, "refine": refine}
+        "qty": {k: v["qty"] for k, v in sizing.items()}, "rules_failed": rules, "refine": refine,
+        "extend": extend}
     print(json.dumps(summary, indent=1))
+    if extend:
+        sys.exit(3)
 
 
 def _words_move(pct):
@@ -451,8 +466,14 @@ def _answer(item, qid):
     return ans.get("noul", ans.get("yes", ans.get("p")))
 
 
+def _require_full_chain(plan):
+    if plan.get("extend"):
+        sys.exit("plan needs a wider chain first: " + json.dumps(plan["extend"]))
+
+
 def cmd_gate(a):
     plan = load(a.plan)
+    _require_full_chain(plan)
     state = load(a.state)
     cfg = state["config"]
     g = gate_config()
@@ -516,6 +537,7 @@ def cmd_gate(a):
 
 def cmd_fill(a):
     plan = load(a.plan)
+    _require_full_chain(plan)
     state = load(a.state)
     cfg = state["config"]
     ob = Outbox(a.outbox)
@@ -892,7 +914,9 @@ def main():
     s = sp.add_parser("init", parents=[common]); s.add_argument("--quotes", required=True)
     s.add_argument("--config"); s.add_argument("--now"); s.set_defaults(f=cmd_init)
     s = sp.add_parser("plan", parents=[common]); s.add_argument("--snapshot", required=True)
-    s.add_argument("--out", default="plan.json"); s.set_defaults(f=cmd_plan)
+    s.add_argument("--out", default="plan.json")
+    s.add_argument("--final", action="store_true", help="accept the chain as fetched (IBKR lists nothing further OTM)")
+    s.set_defaults(f=cmd_plan)
     s = sp.add_parser("gate", parents=[common]); s.add_argument("--plan", default="plan.json")
     s.add_argument("--jev"); s.add_argument("--jev-headlines", dest="jev_headlines", default="jev_headlines.json")
     s.add_argument("--events", default=""); s.add_argument("--headlines", default="")

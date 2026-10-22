@@ -52,6 +52,40 @@ def bars(day, path, start="09:30"):
     return out
 
 
+def check_overnight_sizing(d, w):
+    """At 3 PM the morning 0DTE and last night's put both settle at today's close;
+    they must not block tonight's overnight put."""
+    st = json.loads((d / "state.json").read_text())
+    for p in st["portfolios"].values():
+        p["positions"] = [x for x in p["positions"] if x["status"] != "open"]
+        for leg, exp in (("0dte_put", "2026-10-07"), ("1dte_put", "2026-10-07")):
+            p["positions"].append({"id": leg, "leg": leg, "kind": "P", "strike": 7400, "expiry": exp,
+                                   "qty": 1, "entry_iv": 0.3, "status": "open", "stop": 0.75,
+                                   "limit": 0.9, "spx_entry": 7800, "checked_until": "2026-10-07T09:47:00-04:00"})
+    (d / "state.json").write_text(json.dumps(st))
+    asof = datetime.fromisoformat("2026-10-07T15:02:00-04:00").astimezone(px.ET)
+    S = 774.0 * 10.02
+    snap = {"asof": asof.isoformat(), "leg": "1dte_put", "expiry": "2026-10-08",
+            "spy": {"last": 774.0, "prior_close": 773.0, "open": 773.5, "hv30": 0.12, "iv": 0.126},
+            "aapl": {"last": 333.0, "prior_close": 333.0}, "sgov": {"last": 100.5},
+            "chain": chain(S, asof, datetime(2026, 10, 8).date(), 3, 20)}
+    w("snap_on.json", snap)
+    out = json.loads(run("plan", "--snapshot", "snap_on.json", "--out", "plan_on.json", cwd=d))
+    assert out["qty"]["A"] >= 1 and out["qty"]["B"] >= 1, out
+    # chain edge: a chain that stops at the pick must ask for an extension (exit 3)
+    snap["chain"] = [r for r in snap["chain"] if r["strike"] >= out["chosen"]["strike"]]
+    w("snap_edge.json", snap)
+    r = subprocess.run(THETA + ["plan", "--snapshot", "snap_edge.json", "--out", "plan_edge.json"],
+                       cwd=d, capture_output=True, text=True)
+    assert r.returncode == 3 and '"extend"' in r.stdout, r.stdout + r.stderr
+    r = subprocess.run(THETA + ["fill", "--plan", "plan_edge.json"], cwd=d, capture_output=True, text=True)
+    assert r.returncode != 0 and "wider chain" in r.stderr, r.stderr
+    r = subprocess.run(THETA + ["plan", "--snapshot", "snap_edge.json", "--out", "plan_edge.json", "--final"],
+                       cwd=d, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    print("overnight sizing and chain-edge checks passed")
+
+
 def main():
     d = Path(tempfile.mkdtemp())
     w = lambda name, obj: (d / name).write_text(json.dumps(obj))
@@ -114,6 +148,7 @@ def main():
                          aapl={"last": 290.0, "prior_close": 333.0}))
     print(run("decum", "--snapshot", "snap3.json", cwd=d))
     print(run("report", cwd=d))
+    check_overnight_sizing(d, w)
     man = json.loads((d / "outbox" / "manifest.json").read_text())
     print(f"outbox docs: {len(man)}  ({d})")
 
