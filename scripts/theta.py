@@ -665,6 +665,18 @@ def _smile_iv(pos, K, S):
     return vs[-1]
 
 
+def _settle_spx(pos, bars, ratio, spx_close, now):
+    """SPX at the expiry date's close. Today's close for a same-day expiry; for an
+    expiry settled late (a missed close run), the last bar on the expiry date."""
+    exp_d = date.fromisoformat(pos["expiry"])
+    if exp_d == now.date():
+        return spx_close
+    day = [b for b in bars if b[0].date() == exp_d]
+    if not day:
+        sys.exit(f"{pos['id']} expired {exp_d} but no bars cover that day: fetch a longer bar period")
+    return day[-1][5] * ratio
+
+
 def _simulate_stop(pos, bars, ratio, bump, upto):
     """Walk bars after checked_until; returns (event or None)."""
     K, kind = pos["strike"], pos["kind"]
@@ -742,16 +754,17 @@ def cmd_settle(a):
                 pos["checked_until"] = max(parse_dt(pos["checked_until"]), min(last_bar_end, now)).isoformat()
             exp = px.expiry_dt(date.fromisoformat(pos["expiry"]))
             if now >= exp:
-                intrinsic = max(pos["strike"] - spx_close, 0) if pos["kind"] == "P" else max(spx_close - pos["strike"], 0)
+                settle_px = _settle_spx(pos, bars, ratio, spx_close, now)
+                intrinsic = max(pos["strike"] - settle_px, 0) if pos["kind"] == "P" else max(settle_px - pos["strike"], 0)
                 cost = pos["qty"] * 100 * intrinsic
                 p["cash"] -= cost
                 book(p, now.year, "opt_1256", -cost)
                 pos.update({"status": "expired" if intrinsic == 0 else "assigned_cash",
-                            "exit_price": round(intrinsic, 2), "settle_spx": r2(spx_close),
+                            "exit_price": round(intrinsic, 2), "settle_spx": r2(settle_px),
                             "pnl": r2(pos["qty"] * 100 * pos["entry_price"] - pos["qty"] * comm - cost)})
                 ob.put("events", event_id(now, k, "expire", pos["leg"]),
                        {"ts": now.isoformat(), "portfolio": k, "type": "expire", "leg": pos["leg"],
-                        "strike": pos["strike"], "qty": pos["qty"], "settle_spx": r2(spx_close),
+                        "strike": pos["strike"], "qty": pos["qty"], "settle_spx": r2(settle_px),
                         "intrinsic": r2(intrinsic), "pnl": pos["pnl"], "cash_flow": r2(-cost)})
                 log[k].append(f"{'expired worthless' if intrinsic == 0 else 'SETTLED ITM'} {pos['leg']} {pos['strike']} pnl {pos['pnl']}")
         # keep only open + last 30 closed positions in state
