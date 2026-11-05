@@ -98,6 +98,9 @@ td.bad { color: var(--bad); } td.good { color: var(--good); }
 .tape div > *:nth-child(3) { min-width: 0; }
 .tape .t { color: var(--ink-3); font-family: var(--font-data); }
 .empty { color: var(--ink-2); font-size: 0.9rem; padding: 8px 0; }
+.alert { border: 1px solid var(--bad); background: var(--chip-bad-bg); color: var(--ink); border-radius: 10px; padding: 10px 14px; margin: 0 0 14px; font-size: 0.92rem; }
+.alert b { color: var(--bad); }
+.alert div + div { margin-top: 4px; }
 .note { font-size: 0.78rem; color: var(--ink-3); max-width: 75ch; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
 </style>
@@ -113,6 +116,8 @@ td.bad { color: var(--bad); } td.good { color: var(--good); }
       <span class="chip" id="conn-chip"><span class="dot"></span>connecting</span>
     </div>
   </header>
+
+  <div class="alert" id="health" role="alert" hidden></div>
 
   <section class="panel" id="today">
     <h2>Today's tickets</h2>
@@ -452,12 +457,43 @@ td.bad { color: var(--bad); } td.good { color: var(--good); }
       else if (e.type === "expire") what = `${legName(e.leg)} ${e.strike} ${e.intrinsic > 0 ? "settled in the money at " + e.settle_spx : "expired worthless"}`;
       else if (e.type === "aapl_sale") what = `Sold ${e.shares} Apple @ $${(+e.price).toFixed(2)} · ${esc(e.reason)}`;
       else if (e.type === "forced_sale") what = `Margin forced sale of ${e.shares} Apple`;
+      else if (e.type === "run_failed") what = `<b style="color:var(--bad)">${esc(e.run)} run failed</b> · ${esc(e.reason)}`;
       const cf = e.cash_flow != null ? e.cash_flow : e.pnl;
       return `<div><span class="t">${new Date(e.ts).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}</span><b>${e.portfolio}</b><span>${what}</span><span class="mono ${cf < 0 ? "delta down" : "delta up"}">${cf != null ? fmt$(cf) : ""}</span></div>`;
     }).join("");
   }
 
-  function renderAll() { renderTickets(); renderPorts(); renderEquity(); renderPicker(); renderPlan(); renderTape(); }
+  // ---------------------------------------------------------- run health
+  function nyParts(d) {
+    const f = new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23", weekday: "short" });
+    const o = {}; f.formatToParts(d).forEach((x) => (o[x.type] = x.value));
+    return { date: `${o.year}-${o.month}-${o.day}`, mins: +o.hour * 60 + +o.minute, wd: o.weekday };
+  }
+  function prevWeekday(iso) {
+    const d = new Date(iso + "T12:00:00Z");
+    do { d.setUTCDate(d.getUTCDate() - 1); } while ([0, 6].includes(d.getUTCDay()));
+    return d.toISOString().slice(0, 10);
+  }
+  function renderHealth() {
+    const box = $("health"), lines = [];
+    const h = S.health;
+    if (h && h.status === "failed") {
+      lines.push(`<div><b>The ${esc(h.run)} run failed</b> (${new Date(h.at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}): ${esc(h.reason || "no reason recorded")}</div>`);
+    }
+    const mark = S.state && S.state.last_mark && S.state.last_mark.date;
+    if (mark) {
+      const now = nyParts(new Date());
+      const weekend = now.wd === "Sat" || now.wd === "Sun";
+      const expected = !weekend && now.mins >= 16 * 60 + 40 ? now.date : prevWeekday(now.date);
+      if (mark < prevWeekday(expected)) {
+        lines.push(`<div><b>Stale:</b> the last close mark is from ${esc(mark)}. Close runs since then have not settled or marked anything.</div>`);
+      }
+    }
+    box.innerHTML = lines.join("");
+    box.hidden = !lines.length;
+  }
+
+  function renderAll() { renderTickets(); renderHealth(); renderPorts(); renderEquity(); renderPicker(); renderPlan(); renderTape(); }
 
   $("plan-pick").addEventListener("change", (e) => { S.pick = e.target.value; renderPlan(); });
   const mq = window.matchMedia("(prefers-color-scheme: dark)");
@@ -477,10 +513,11 @@ td.bad { color: var(--bad); } td.good { color: var(--good); }
     } catch (e) { /* approvals still save without an id */ }
     setConn("live", "good");
     const err = () => setConn("connection problem", "bad");
-    db.doc("state/current").onSnapshot((s) => { S.state = s.exists ? s.data() : null; renderPorts(); renderTickets(); }, err);
+    db.doc("state/current").onSnapshot((s) => { S.state = s.exists ? s.data() : null; renderPorts(); renderTickets(); renderHealth(); }, err);
     db.collection("plans").orderBy("asof", "desc").limit(120).onSnapshot((q) => { S.plans = q.docs.map((d) => d.data()); renderPicker(); renderTickets(); renderPlan(); }, err);
     db.collection("history").orderBy("date", "asc").limit(1000).onSnapshot((q) => { S.history = q.docs.map((d) => d.data()); renderPorts(); renderEquity(); }, err);
     db.collection("events").orderBy("ts", "desc").limit(200).onSnapshot((q) => { S.events = q.docs.map((d) => d.data()); renderTape(); }, err);
+    db.doc("health/current").onSnapshot((s) => { S.health = s.exists ? s.data() : null; renderHealth(); }, err);
     db.collection("approvals").onSnapshot((q) => { S.approvals = {}; q.docs.forEach((d) => (S.approvals[d.id] = d.data())); renderTickets(); }, err);
   }
   start();

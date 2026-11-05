@@ -17,6 +17,8 @@ Commands
   settle   simulate stops through price bars, settle expiries, sweep cash, mark
   stage    print create_order_instruction arguments (test or live)
   report   print a short text summary of state
+  calendar is a date an NYSE trading day? (exit 0 yes, 10 no); needs no market data
+  health   record a run's outcome (ok or failed) for the dashboard banner
 """
 from __future__ import annotations
 
@@ -903,6 +905,99 @@ def cmd_link(a):
     print(json.dumps(plan["approval"], indent=1))
 
 
+# ---------------------------------------------------------------- calendar and health
+
+def _easter(y):
+    a, b, c = y % 19, y // 100, y % 100
+    d, e = b // 4, b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = c // 4, c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    return date(y, month, (h + l - 7 * m + 114) % 31 + 1)
+
+
+def _nth_weekday(y, month, weekday, n):
+    """n-th (1-based) weekday of a month; n = -1 for the last one."""
+    if n > 0:
+        d = date(y, month, 1)
+        d += timedelta(days=(weekday - d.weekday()) % 7)
+        return d + timedelta(weeks=n - 1)
+    d = date(y + (month == 12), month % 12 + 1, 1) - timedelta(days=1)
+    return d - timedelta(days=(d.weekday() - weekday) % 7)
+
+
+def _observed(d):
+    if d.weekday() == 5:
+        return d - timedelta(days=1)
+    if d.weekday() == 6:
+        return d + timedelta(days=1)
+    return d
+
+
+def nyse_holidays(y):
+    """Regular NYSE full-day closures for year y (rules, not a fetched list).
+    Unscheduled closures (national days of mourning, storms) are not known here."""
+    h = {
+        _nth_weekday(y, 1, 0, 3): "Martin Luther King Jr. Day",
+        _nth_weekday(y, 2, 0, 3): "Washington's Birthday",
+        _easter(y) - timedelta(days=2): "Good Friday",
+        _nth_weekday(y, 5, 0, -1): "Memorial Day",
+        _observed(date(y, 7, 4)): "Independence Day",
+        _nth_weekday(y, 9, 0, 1): "Labor Day",
+        _nth_weekday(y, 11, 3, 4): "Thanksgiving Day",
+        _observed(date(y, 12, 25)): "Christmas Day",
+    }
+    ny = date(y, 1, 1)
+    if ny.weekday() != 5:  # a Saturday New Year's Day is not made up on Dec 31
+        h[_observed(ny)] = "New Year's Day"
+    if y >= 2022:
+        h[_observed(date(y, 6, 19))] = "Juneteenth"
+    return h
+
+
+def trading_day(d):
+    if d.weekday() >= 5:
+        return False, "weekend"
+    name = nyse_holidays(d.year).get(d)
+    return (False, name) if name else (True, "regular session")
+
+
+def prev_trading_day(d):
+    d -= timedelta(days=1)
+    while not trading_day(d)[0]:
+        d -= timedelta(days=1)
+    return d
+
+
+def cmd_calendar(a):
+    d = date.fromisoformat(a.date) if a.date else datetime.now(px.ET).date()
+    ok, why = trading_day(d)
+    print(json.dumps({"date": d.isoformat(), "trading_day": ok, "reason": why,
+                      "prev_trading_day": prev_trading_day(d).isoformat()}))
+    sys.exit(0 if ok else 10)
+
+
+def cmd_health(a):
+    """One doc per run plus health/current, which drives the dashboard banner.
+    A failure also goes on the event tape."""
+    now = parse_dt(a.now) if a.now else datetime.now(px.ET)
+    doc = {"run": a.run, "status": a.status, "reason": a.reason or None,
+           "at": now.isoformat(), "date": now.date().isoformat()}
+    ob = Outbox(a.outbox)
+    ob.put("health", f"{now.date().isoformat()}-{a.run}", doc)
+    ob.put("health", "current", doc)
+    if a.status == "failed":
+        ob.put("events", event_id(now, "desk", "run-failed", a.run),
+               {"ts": now.isoformat(), "portfolio": "–", "type": "run_failed",
+                "run": a.run, "reason": a.reason or "unknown"})
+    ob.save()
+    print(json.dumps(doc, indent=1))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sp = ap.add_subparsers(dest="cmd", required=True)
@@ -941,6 +1036,13 @@ def main():
     s.add_argument("--dashboard"); s.add_argument("--ibkr-url", dest="ibkr_url")
     s.add_argument("--instruction-id", dest="instruction_id"); s.add_argument("--staging")
     s.set_defaults(f=cmd_link)
+    s = sp.add_parser("calendar"); s.add_argument("--date", help="YYYY-MM-DD, default today in New York")
+    s.set_defaults(f=cmd_calendar)
+    s = sp.add_parser("health", parents=[common])
+    s.add_argument("--run", required=True, choices=["morning", "afternoon", "close"])
+    s.add_argument("--status", required=True, choices=["ok", "failed"])
+    s.add_argument("--reason", default=""); s.add_argument("--now")
+    s.set_defaults(f=cmd_health)
     a = ap.parse_args()
     a.f(a)
 

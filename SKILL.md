@@ -44,8 +44,42 @@ Option quotes are ~15 min delayed; paper fills are at the delayed bid.
 
 ## Before anything else
 
-If today is not a US market trading day (weekend, NYSE holiday, or no SPXW expiration
-dated today in `get_option_parameters`), stop quietly: no writes, no notification.
+1. **Trading day?** `python3 scripts/theta.py calendar`. Exit 10 means a weekend or NYSE
+   holiday: stop quietly, no writes, no notification. Decide this only from the
+   calendar command, never from IBKR: a missing or broken broker connection looks
+   exactly like a closed market, and that mistake once hid three days of failed runs.
+2. **IBKR reachable?** The Interactive Brokers connector's tools must be loaded (search
+   for them with ToolSearch if they are deferred) and the first call (the quotes
+   snapshot) must return prices. If the tools are missing, or calls fail with an
+   auth, connection or "needs reconnect" error, the run has **failed** (below).
+   Retry a transient error once before deciding that.
+3. The one exception: IBKR is working, the calendar says trading day, but
+   `get_option_parameters` lists no SPXW expiration dated today. That is an
+   unscheduled closure (national day of mourning and the like): stop quietly.
+
+## When a run fails
+
+Anything that stops a run on a trading day before its outbox is sent (IBKR missing or
+erroring, a script error you cannot fix, a database write that keeps failing) is a
+failure, and failures are never silent, whatever `notify.enabled` says:
+
+1. `python3 scripts/theta.py health --run <morning|afternoon|close> --status failed --reason "<one plain sentence>"`
+   and send its outbox (the health docs plus a tape event) in one `ArtifactData batch`.
+   Send only those docs; never send a half-finished run's state.
+2. `PushNotification`, under 200 characters, even in quiet mode, for example:
+   `Theta desk: close run failed, IBKR connector needs reconnecting in claude.ai settings. Nothing settled today.`
+   Send at most one per run.
+3. End the session with a short message saying what failed.
+
+The dashboard shows a red banner from `health/current`, and another one if the last
+close mark is more than a trading day old, so a missed run is visible even if the
+notification is missed.
+
+## Every successful run
+
+Before sending the outbox, add
+`python3 scripts/theta.py health --run <morning|afternoon|close> --status ok`
+so the same batch clears the dashboard banner.
 
 ## Quotes snapshot (all runs)
 
@@ -96,7 +130,7 @@ Map to `spy: {last, prior_close, open, iv (annual_iv), hv30, iv_pctile_52w (52-w
 8. `python3 scripts/theta.py gate --plan plan.json --jev jev.json --jev-headlines jev_headlines.json --events "..." --headline "..." --headline "..."`
    (the same events and headlines as step 7, in the same order).
 9. `python3 scripts/theta.py fill --plan plan.json --state-version V` (paper fills, both portfolios).
-10. Approval pipeline (below), then send the outbox, then notify only if
+10. Approval pipeline (below), `health --status ok`, then send the outbox, then notify only if
     `notify.enabled` is true (see Notifications).
 
 ## Afternoon run, ~3:01 PM ET: overnight put + AAPL decumulation
@@ -129,7 +163,7 @@ pace backstop. Sales show on the dashboard tape (and in the notification when no
    `get_order_instructions` and `delete_order_instruction` every test instruction this
    skill staged (a 1-lot BUY at $0.05 on an SPXW put), from today or earlier. Never
    delete anything else. Report what was deleted.
-6. Send the outbox. Notify only if `notify.enabled` is true and something happened: a
+6. `health --run close --status ok`, then send the outbox. Notify only if `notify.enabled` is true and something happened: a
    stop, an in-the-money settlement, a forced sale, or a decumulation sale.
 
 ## Approval pipeline
@@ -164,9 +198,9 @@ When it does not pass: `python3 scripts/theta.py link --plan plan.json` (records
 Check `notify.enabled` in `config.default.json` (overridden by `config.local.json`).
 It is currently **false**: the experiment runs silently. Do not call
 `PushNotification` or `SendUserMessage` on any run, including reject days, stops,
-settlements and Apple sales; everything is on the dashboard. A run that cannot
-complete (a tool error, a failed database write) still ends with a short final
-message describing the failure, which appears only in that run's session.
+settlements and Apple sales; everything is on the dashboard. The one exception is a
+failed run: it always records health and sends one `PushNotification`
+(see When a run fails).
 
 When `notify.enabled` is true:
 1. `PushNotification` (under 200 characters), for example:

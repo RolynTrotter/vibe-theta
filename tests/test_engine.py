@@ -86,6 +86,25 @@ def check_overnight_sizing(d, w):
     print("overnight sizing and chain-edge checks passed")
 
 
+def check_calendar_and_health(d):
+    """The trading-day check must not depend on market data, so a disconnected
+    broker can never pass for a holiday; a failed run must reach the dashboard."""
+    days = {"2026-11-03": 0, "2026-11-07": 10, "2026-11-26": 10, "2026-12-25": 10,
+            "2027-01-01": 10, "2027-12-31": 0, "2027-06-18": 10, "2027-03-26": 10,
+            "2027-07-05": 10, "2026-07-03": 10}
+    for day, code in days.items():
+        r = subprocess.run(THETA + ["calendar", "--date", day], capture_output=True, text=True)
+        assert r.returncode == code, (day, r.returncode, r.stdout, r.stderr)
+    run("health", "--run", "close", "--status", "failed", "--reason", "IBKR connector not connected",
+        "--now", "2026-11-05T16:21:00-05:00", "--outbox", "hb", cwd=d)
+    man = json.loads((d / "hb" / "manifest.json").read_text())
+    got = {(e["collection"], e["doc_id"]) for e in man}
+    assert ("health", "current") in got and ("health", "2026-11-05-close") in got, got
+    assert any(c == "events" and "run-failed" in i for c, i in got), got
+    cur = json.loads(Path([e for e in man if e["doc_id"] == "current"][0]["file_path"]).read_text())
+    assert cur["status"] == "failed" and cur["date"] == "2026-11-05", cur
+
+
 def main():
     d = Path(tempfile.mkdtemp())
     w = lambda name, obj: (d / name).write_text(json.dumps(obj))
@@ -149,6 +168,7 @@ def main():
     print(run("decum", "--snapshot", "snap3.json", cwd=d))
     print(run("report", cwd=d))
     check_overnight_sizing(d, w)
+    check_calendar_and_health(d)
     man = json.loads((d / "outbox" / "manifest.json").read_text())
     print(f"outbox docs: {len(man)}  ({d})")
 
