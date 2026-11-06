@@ -1,0 +1,203 @@
+[
+ {
+  "session": "Nov 3 PM overnight",
+  "strike": 7040,
+  "otm_pct": 7.02,
+  "bid": 0.15,
+  "p_ok": 0.24,
+  "max_shock": 0.22,
+  "A": {
+   "trade": false,
+   "reason": "gut check said no (market p=0.24)"
+  },
+  "B": {
+   "trade": true,
+   "reason": "rules pass"
+  },
+  "fills": {
+   "B": {
+    "qty": 1,
+    "price": 0.15,
+    "stop": 1.5,
+    "limit": 1.65
+   }
+  }
+ },
+ {
+  "decum": "Nov 3 PM overnight",
+  "out": "{\n \"A\": \"sold 50 @ 329.94 (AAPL down -2.6%), LT loss -154\",\n \"B\": \"sold 50 @ 329.94 (AAPL down -2.6%), LT loss -154\"\n}\n"
+ },
+ {
+  "close": "2026-11-03",
+  "out": {
+   "log": {
+    "A": [
+     "expired worthless 0dte_put 7295 pnl 8.75",
+     "sleeve +164 SGOV"
+    ],
+    "B": [
+     "expired worthless 1dte_put 7060 pnl 13.75",
+     "expired worthless 0dte_put 7295 pnl 8.75",
+     "sleeve +164 SGOV"
+    ]
+   },
+   "nlv": {
+    "A": 348589.02,
+    "B": 348690.63
+   }
+  }
+ },
+ {
+  "session": "Nov 4 AM 0DTE",
+  "strike": 7415,
+  "otm_pct": 3.67,
+  "bid": 0.1,
+  "p_ok": 0.73,
+  "max_shock": 0.73,
+  "A": {
+   "trade": false,
+   "reason": "headline veto: \"Iran's Revolutionary Guard says four oil tankers caught fire after hitting mines in the Strait of Hormuz\" (shock 0.73)"
+  },
+  "B": {
+   "trade": true,
+   "reason": "rules pass"
+  },
+  "fills": {
+   "B": {
+    "qty": 1,
+    "price": 0.1,
+    "stop": 1.0,
+    "limit": 1.15
+   }
+  }
+ },
+ {
+  "session": "Nov 4 PM overnight",
+  "strike": 7100,
+  "otm_pct": 7.71,
+  "bid": 0.05,
+  "p_ok": 0.71,
+  "max_shock": 0.2,
+  "A": {
+   "trade": true,
+   "reason": "rules pass and gut check passed"
+  },
+  "B": {
+   "trade": true,
+   "reason": "rules pass"
+  },
+  "fills": {
+   "A": {
+    "qty": 1,
+    "price": 0.05,
+    "stop": 1.0,
+    "limit": 1.15
+   },
+   "B": {
+    "qty": 1,
+    "price": 0.05,
+    "stop": 1.0,
+    "limit": 1.15
+   }
+  }
+ },
+ {
+  "decum": "Nov 4 PM overnight",
+  "out": "{\n \"A\": \"hold (AAPL +6.1%)\",\n \"B\": \"hold (AAPL +6.1%)\"\n}\n"
+ },
+ {
+  "close": "2026-11-04",
+  "out": {
+   "log": {
+    "A": [],
+    "B": [
+     "expired worthless 1dte_put 7040 pnl 13.75",
+     "expired worthless 0dte_put 7415 pnl 8.75"
+    ]
+   },
+   "nlv": {
+    "A": 363784.85,
+    "B": 363902.12
+   }
+  }
+ },
+ {
+  "session": "Nov 5 AM 0DTE",
+  "strike": 7325,
+  "otm_pct": 3.36,
+  "bid": 0.1,
+  "p_ok": 0.68,
+  "max_shock": 0.33,
+  "A": {
+   "trade": true,
+   "reason": "rules pass and gut check passed"
+  },
+  "B": {
+   "trade": true,
+   "reason": "rules pass"
+  },
+  "fills": {
+   "A": {
+    "qty": 1,
+    "price": 0.1,
+    "stop": 1.0,
+    "limit": 1.15
+   },
+   "B": {
+    "qty": 1,
+    "price": 0.1,
+    "stop": 1.0,
+    "limit": 1.15
+   }
+  }
+ },
+ {
+  "session": "Nov 5 PM overnight",
+  "strike": 5600,
+  "otm_pct": 24.51,
+  "bid": 0.15,
+  "p_ok": 0.12,
+  "max_shock": 0.73,
+  "A": {
+   "trade": false,
+   "reason": "gut check said no (market p=0.12)"
+  },
+  "B": {
+   "trade": true,
+   "reason": "rules pass"
+  },
+  "fills": {
+   "B": {
+    "qty": 1,
+    "price": 0.15,
+    "stop": 1.5,
+    "limit": 1.65
+   }
+  }
+ },
+ {
+  "decum": "Nov 5 PM overnight",
+  "out": "{\n \"A\": \"hold (AAPL -0.9%)\",\n \"B\": \"hold (AAPL -0.9%)\"\n}\n"
+ },
+ {
+  "close": "2026-11-05",
+  "out": {
+   "log": {
+    "A": [
+     "expired worthless 1dte_put 7100 pnl 3.75",
+     "STOP 0dte_put 7325 @ 1.15 (stop-limit filled intrabar)",
+     "paid 1 SGOV from sleeve"
+    ],
+    "B": [
+     "expired worthless 1dte_put 7100 pnl 3.75",
+     "STOP 0dte_put 7325 @ 1.15 (stop-limit filled intrabar)",
+     "paid 1 SGOV from sleeve"
+    ]
+   },
+   "nlv": {
+    "A": 359186.77,
+    "B": 359302.98
+   }
+  }
+ }
+]
