@@ -4,11 +4,11 @@
   "strike": 7040,
   "otm_pct": 7.02,
   "bid": 0.15,
-  "p_ok": 0.24,
+  "p_ok": 0.25,
   "max_shock": 0.22,
   "A": {
    "trade": false,
-   "reason": "gut check said no (market p=0.24)"
+   "reason": "gut check said no (market p=0.25)"
   },
   "B": {
    "trade": true,
@@ -32,12 +32,16 @@
   "out": {
    "log": {
     "A": [
+     "note: 2026-11-03-0dte_put-A stop checked with the model, no option bars given",
      "expired worthless 0dte_put 7295 pnl 8.75",
      "sleeve +164 SGOV"
     ],
     "B": [
+     "note: 2026-11-02-1dte_put-B stop checked with the model, no option bars given",
      "expired worthless 1dte_put 7060 pnl 13.75",
+     "note: 2026-11-03-0dte_put-B stop checked with the model, no option bars given",
      "expired worthless 0dte_put 7295 pnl 8.75",
+     "note: 2026-11-03-1dte_put-B stop checked with the model, no option bars given",
      "sleeve +164 SGOV"
     ]
    },
@@ -52,11 +56,11 @@
   "strike": 7415,
   "otm_pct": 3.67,
   "bid": 0.1,
-  "p_ok": 0.73,
-  "max_shock": 0.73,
+  "p_ok": 0.76,
+  "max_shock": 0.74,
   "A": {
    "trade": false,
-   "reason": "headline veto: \"Iran's Revolutionary Guard says four oil tankers caught fire after hitting mines in the Strait of Hormuz\" (shock 0.73)"
+   "reason": "headline veto: \"Iran's Revolutionary Guard says four oil tankers caught fire after hitting mines in the Strait of Hormuz\" (shock 0.74)"
   },
   "B": {
    "trade": true,
@@ -76,8 +80,8 @@
   "strike": 7100,
   "otm_pct": 7.71,
   "bid": 0.05,
-  "p_ok": 0.71,
-  "max_shock": 0.2,
+  "p_ok": 0.72,
+  "max_shock": 0.18,
   "A": {
    "trade": true,
    "reason": "rules pass and gut check passed"
@@ -111,7 +115,9 @@
    "log": {
     "A": [],
     "B": [
+     "note: 2026-11-03-1dte_put-B stop checked with the model, no option bars given",
      "expired worthless 1dte_put 7040 pnl 13.75",
+     "note: 2026-11-04-0dte_put-B stop checked with the model, no option bars given",
      "expired worthless 0dte_put 7415 pnl 8.75"
     ]
    },
@@ -126,8 +132,8 @@
   "strike": 7325,
   "otm_pct": 3.36,
   "bid": 0.1,
-  "p_ok": 0.68,
-  "max_shock": 0.33,
+  "p_ok": 0.66,
+  "max_shock": 0.29,
   "A": {
    "trade": true,
    "reason": "rules pass and gut check passed"
@@ -157,7 +163,7 @@
   "otm_pct": 24.51,
   "bid": 0.15,
   "p_ok": 0.12,
-  "max_shock": 0.73,
+  "max_shock": 0.71,
   "A": {
    "trade": false,
    "reason": "gut check said no (market p=0.12)"
@@ -184,19 +190,20 @@
   "out": {
    "log": {
     "A": [
-     "expired worthless 1dte_put 7100 pnl 3.75",
-     "STOP 0dte_put 7325 @ 1.15 (stop-limit filled intrabar)",
-     "paid 1 SGOV from sleeve"
+     "STOP 1dte_put 7100 @ 1.15 (stop-limit filled intrabar (option prices))",
+     "STOP 0dte_put 7325 @ 1.15 (stop-limit filled intrabar (option prices))",
+     "paid 2 SGOV from sleeve"
     ],
     "B": [
-     "expired worthless 1dte_put 7100 pnl 3.75",
-     "STOP 0dte_put 7325 @ 1.15 (stop-limit filled intrabar)",
-     "paid 1 SGOV from sleeve"
+     "STOP 1dte_put 7100 @ 1.15 (stop-limit filled intrabar (option prices))",
+     "STOP 0dte_put 7325 @ 1.15 (stop-limit filled intrabar (option prices))",
+     "note: 2026-11-05-1dte_put-B stop checked with the model, no option bars given",
+     "paid 2 SGOV from sleeve"
     ]
    },
    "nlv": {
-    "A": 359186.77,
-    "B": 359302.98
+    "A": 359070.52,
+    "B": 359186.73
    }
   }
  }

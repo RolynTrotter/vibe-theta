@@ -105,6 +105,37 @@ def check_calendar_and_health(d):
     assert cur["status"] == "failed" and cur["date"] == "2026-11-05", cur
 
 
+def check_option_price_stops():
+    """Stops trigger on the option's own traded prices, not the model."""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import theta
+    pos = {"id": "x", "strike": 7100, "kind": "P", "expiry": "2026-11-05", "stop": 1.0, "limit": 1.15,
+           "stop_state": "armed", "checked_until": "2026-11-04T15:02:00-05:00"}
+    def ob(rows):
+        f = Path(tempfile.mkdtemp()) / "x.json"
+        f.write_text(json.dumps({"chart_step": 1800, "time": [r[0] for r in rows], "open": [r[1] for r in rows],
+                                 "high": [r[2] for r in rows], "low": [r[3] for r in rows], "close": [r[4] for r in rows]}))
+        return theta._bars([f])
+    upto = theta.parse_dt("2026-11-05T16:20:00-05:00")
+    # quiet night, then the option trades through the stop mid-morning
+    ev = theta._stop_from_option_bars(dict(pos), ob([("2026-11-04T19:30:00Z", .05, .05, .05, .05),
+                                                     ("2026-11-05T15:00:00Z", .1, .6, .1, .45),
+                                                     ("2026-11-05T15:30:00Z", .5, 2.05, .25, .75)]), upto)
+    assert ev and ev["price"] == 1.15 and "option prices" in ev["how"], ev
+    # gap: opens above the limit, later trades back down to it
+    p2 = dict(pos)
+    ev = theta._stop_from_option_bars(p2, ob([("2026-11-05T14:30:00Z", 3.0, 4.0, 2.5, 3.0),
+                                              ("2026-11-05T15:00:00Z", 2.0, 2.2, 1.1, 1.3)]), upto)
+    assert ev and "after gap" in ev["how"], ev
+    # option never reaches the stop: no stop, whatever the index did
+    ev = theta._stop_from_option_bars(dict(pos), ob([("2026-11-05T15:00:00Z", .1, .9, .05, .3)]), upto)
+    assert ev is None
+    # bars from before entry are ignored
+    ev = theta._stop_from_option_bars(dict(pos), ob([("2026-11-04T14:30:00Z", .9, 3.0, .8, .9)]), upto)
+    assert ev is None
+    print("option-price stop checks passed")
+
+
 def main():
     d = Path(tempfile.mkdtemp())
     w = lambda name, obj: (d / name).write_text(json.dumps(obj))
@@ -169,6 +200,7 @@ def main():
     print(run("report", cwd=d))
     check_overnight_sizing(d, w)
     check_calendar_and_health(d)
+    check_option_price_stops()
     man = json.loads((d / "outbox" / "manifest.json").read_text())
     print(f"outbox docs: {len(man)}  ({d})")
 

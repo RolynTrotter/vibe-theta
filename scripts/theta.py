@@ -562,7 +562,7 @@ def cmd_fill(a):
                "spx_entry": plan["spx"], "stop": stop_px,
                "limit": round(stop_px + leg["limit_ticks"] * cfg["costs"]["tick"], 2),
                "stop_state": "armed", "checked_until": plan["asof"], "status": "open",
-               "smile": plan.get("smile")}
+               "smile": plan.get("smile"), "contract_id_ex": c.get("contract_id_ex")}
         p["positions"].append(pos)
         p["cash"] += qty * 100 * price - qty * comm
         book(p, now.year, "opt_1256", qty * 100 * price - qty * comm)
@@ -677,20 +677,51 @@ def _settle_spx(pos, bars, ratio, spx_close, now):
     return day[-1][5] * ratio
 
 
+def _stop_from_option_bars(pos, obars, upto):
+    """Stops from the option's own traded prices (IBKR price history for the
+    contract). This is the primary method; the model below is only a fallback."""
+    start = parse_dt(pos["checked_until"])
+    exp = px.expiry_dt(date.fromisoformat(pos["expiry"]))
+    for t0, t1, o, h, l, c in obars:
+        if t1 <= start or t0 >= min(upto, exp):
+            continue
+        if pos["stop_state"] == "armed":
+            if t0 >= start and o >= pos["stop"]:
+                # the option opened the bar beyond the stop: a true gap
+                if o <= pos["limit"]:
+                    return {"t": t0, "price": round(o, 2), "how": "stop-limit filled at open (option prices)"}
+                pos["stop_state"] = "gapped"
+                pos["gapped_at"] = t0.isoformat()
+            elif h >= pos["stop"]:
+                return {"t": t1, "price": pos["limit"], "how": "stop-limit filled intrabar (option prices)"}
+            else:
+                continue
+        if pos["stop_state"] == "gapped" and l <= pos["limit"]:
+            return {"t": t1, "price": pos["limit"], "how": "resting limit filled after gap (option prices)"}
+    return None
+
+
 def _simulate_stop(pos, bars, ratio, bump, upto):
-    """Walk bars after checked_until; returns (event or None)."""
+    """FALLBACK ONLY, for when IBKR has no price history for the contract.
+    Walk SPY bars after checked_until and model the option; returns (event or None).
+
+    Time runs in trading-variance units, so the hours the market is closed don't
+    eat the option's remaining life, and the strike's volatility never falls
+    below where it was at entry on a down move (sticky strike, plus the bump)."""
     K, kind = pos["strike"], pos["kind"]
     start = parse_dt(pos["checked_until"])
     exp = px.expiry_dt(date.fromisoformat(pos["expiry"]))
     for t0, t1, o, h, l, c in bars:
         if t1 <= start or t0 >= min(upto, exp):
             continue
-        T = px.years_to(exp, t1)
+        entry_t = parse_dt(pos.get("entry_time") or pos["checked_until"])
+        v_entry = px.variance_days(entry_t, exp)
+        T = px.years_to(exp, entry_t) * px.variance_days(t1, exp) / v_entry if t1 < exp else 0.0
 
         def value(level):
             spx_l = level * ratio
             mv = (pos["spx_entry"] - spx_l) if kind == "P" else (spx_l - pos["spx_entry"])
-            base = _smile_iv(pos, K, spx_l)
+            base = max(_smile_iv(pos, K, spx_l), pos["entry_iv"]) if mv > 0 else _smile_iv(pos, K, spx_l)
             v = base + bump * max(0.0, mv / pos["spx_entry"] * 100) / 100
             return px.bs_put(spx_l, K, T, v) if kind == "P" else px.bs_call(spx_l, K, T, v)
 
@@ -725,6 +756,7 @@ def cmd_settle(a):
         state["spx_spy_ratio"] = a.ratio
     ratio = state["spx_spy_ratio"]
     bars = _bars(a.bars or [])
+    opt_dir = Path(a.option_bars) if a.option_bars else None
     bump = cfg["stops"]["vol_bump_pts_per_pct"]
     comm = cfg["costs"]["commission_per_contract"]
     ob = Outbox(a.outbox)
@@ -735,7 +767,15 @@ def cmd_settle(a):
         for pos in p["positions"]:
             if pos["status"] != "open":
                 continue
-            ev = _simulate_stop(pos, bars, ratio, bump, now)
+            of = opt_dir / f"{pos['id']}.json" if opt_dir else None
+            obars = _bars([of]) if of and of.exists() else []
+            if obars:
+                ev = _stop_from_option_bars(pos, obars, now)
+                pos["stop_source"] = "option prices"
+            else:
+                ev = _simulate_stop(pos, bars, ratio, bump, now)
+                pos["stop_source"] = "model (no option price history)"
+                log[k].append(f"note: {pos['id']} stop checked with the model, no option bars given")
             if ev:
                 cost = pos["qty"] * 100 * ev["price"] + pos["qty"] * comm
                 p["cash"] -= cost
@@ -749,7 +789,7 @@ def cmd_settle(a):
                         "pnl": pos["pnl"], "cash_flow": r2(-cost)})
                 log[k].append(f"STOP {pos['leg']} {pos['strike']} @ {ev['price']} ({ev['how']})")
                 continue
-            last_bar_end = max((b[1] for b in bars), default=None)
+            last_bar_end = max((b[1] for b in (obars or bars)), default=None)
             if last_bar_end:
                 pos["checked_until"] = max(parse_dt(pos["checked_until"]), min(last_bar_end, now)).isoformat()
             exp = px.expiry_dt(date.fromisoformat(pos["expiry"]))
@@ -1034,6 +1074,8 @@ def main():
     s = sp.add_parser("decum", parents=[common]); s.add_argument("--snapshot", required=True); s.set_defaults(f=cmd_decum)
     s = sp.add_parser("settle", parents=[common]); s.add_argument("--quotes", required=True)
     s.add_argument("--bars", nargs="*"); s.add_argument("--now"); s.add_argument("--ratio", type=float)
+    s.add_argument("--option-bars", dest="option_bars",
+                   help="folder of IBKR price-history files, one per open position, named <position id>.json")
     s.set_defaults(f=cmd_settle)
     s = sp.add_parser("stage", parents=[common]); s.add_argument("--plan", default="plan.json")
     s.add_argument("--mode", choices=["test", "live"], default="test"); s.add_argument("--portfolio", default="A")

@@ -3,7 +3,8 @@
 Starts from the last good state (v60, Nov 3 morning) and runs plan/gut check/gate/fill/
 decum/settle exactly as the scheduled runs would, using prices recovered from IBKR.
 Chains for Nov 3 PM and Nov 4 AM expired out of IBKR, so those are priced at the same
-moneyness as the previous day's real chain. Every plan is marked RECONSTRUCTED.
+moneyness as the previous day's real chain. Every plan is marked RECONSTRUCTED. Stops use the options' own IBKR price history
+(optbars/) where IBKR still had it, and the engine's fallback model elsewhere.
 """
 import json, math, subprocess, sys
 from datetime import datetime, date
@@ -17,7 +18,7 @@ import pricing as px  # noqa: E402
 THETA = [sys.executable, str(ROOT / "scripts" / "theta.py")]
 JEV = "/mnt/skills/plugins/vibe-classification/scripts/jev.py"
 RATIO = 10.027          # S&P 500 close 7688.62 / SPY close 766.81 on Nov 4
-VER = "61"              # dashboard state version we overwrite
+VER = "62"              # dashboard state version we overwrite
 HV30 = 0.116
 LOG = []
 
@@ -102,7 +103,7 @@ def close(day, spy_close, aapl_close):
     json.dump({"spy": spy_close, "aapl": aapl_close, "sgov": 100.43, "spy_close": spy_close},
               open(HERE / "quotes.json", "w"))
     out = sh("settle", "--quotes", "quotes.json", "--bars", "spy_bars.json", "--now", f"{day}T16:20:00-05:00",
-             "--ratio", str(RATIO), "--state-version", VER)
+             "--option-bars", "optbars", "--ratio", str(RATIO), "--state-version", VER)
     LOG.append({"close": day, "out": json.loads(out)})
 
 

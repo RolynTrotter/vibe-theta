@@ -176,10 +176,21 @@ pace backstop. Sales show on the dashboard tape (and in the notification when no
    `outside_rth false`, `period ONE_DAY` (use `TWO_DAYS` if state has an open overnight
    put from the previous session; `THREE_DAYS`/`ONE_WEEK` after weekends or holidays).
    Save the raw result as `bars.json`.
+2b. Option bars (this is what decides stops): for every position in `state.json` with
+   status `open` (both portfolios; one fetch per contract is enough when A and B hold
+   the same one), call `get_price_history` with the numeric contract id (the part of
+   the position's `contract_id_ex` before `@`; for older positions without it, take
+   `chosen.contract_id_ex` from that position's plan doc), `security_type OPT`,
+   `exchange` from after the `@` (usually SMART), `step FIVE_MINS`, `outside_rth false`,
+   and a period covering everything since the position's `checked_until` (`ONE_DAY`,
+   or `TWO_DAYS` for an overnight put). Save each raw result as
+   `optbars/<position id>.json`, under every position id that holds that contract.
+   If IBKR returns no bars for a contract, leave it out: `settle` falls back to the
+   model for that one position and says so in its log.
 3. Ratio: on the next SPXW expiration, snapshot the call and put at the strike nearest
    SPX (bid_ask). ratio = (call mid − put mid + strike) / SPY close. Use it only if
    between 9.9 and 10.2.
-4. `python3 scripts/theta.py settle --quotes quotes.json --bars bars.json --ratio R --state-version V`
+4. `python3 scripts/theta.py settle --quotes quotes.json --bars bars.json --option-bars optbars --ratio R --state-version V`
 5. Approvals: `ArtifactData query` collection `approvals` for today's plan ids; the
    dashboard writes `{decision, at}` there. Copy the decision into the plan doc's
    `approval.status` (in the outbox: edit `plans/<id>` or re-run `link`).
@@ -247,9 +258,15 @@ and P(stop) by strike, expected value per contract), crash tables, events and ap
 ## Model limits worth stating when reporting
 
 - Option quotes are 15-minute delayed; SPX is derived from SPY.
-- Stops are simulated from 5-minute SPY bars with a crash vol bump of 2 vol points per
-  1% drop. A move inside a bar fills at the limit; a bar that opens past the stop is a
-  gap, and the stop-limit stays unfilled unless prices come back.
+- Stops trigger on the option's own traded prices (IBKR 5-minute bars for the
+  contract). A bar whose high reaches the stop fills at the limit; a bar that opens
+  past the limit is a gap, and the stop-limit stays unfilled until the option trades
+  back down to it. Trade prints, not quotes: a single odd print can trip a stop, which
+  errs on the side of booking the loss.
+- Only when IBKR has no history for a contract does `settle` model the option from SPY
+  bars (trading-time decay, the strike's entry volatility as a floor on down moves,
+  plus 2 vol points per 1% drop). The log and the position's `stop_source` say which
+  method was used.
 - Margin is a rough portfolio-margin approximation, not IBKR's calculation.
 - Taxes are tracked as 1256 option P&L, AAPL long-term gains/losses and SPY gains; the
   dashboard's tax numbers are estimates, not advice.
