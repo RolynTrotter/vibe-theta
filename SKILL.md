@@ -121,6 +121,14 @@ regular hours; after the close `change` is measured from today's close).
 Map to `spy: {last, prior_close, open, iv (annual_iv), hv30, iv_pctile_52w (52-week value)}`,
 `aapl: {last, prior_close}`, `sgov: {last}`.
 
+**SPY daily bars (morning and afternoon runs):** `get_price_history` SPY (756733),
+`security_type STK`, `step ONE_DAY`, `outside_rth false`, `period THREE_MONTHS`. Save the
+raw result as `spy_daily.json` next to `snapshot.json`; `plan` reads it by default and
+computes realized vol from the actual closes. Do not rely on `historical_vol`: on
+Nov 16 2026 it read 13.7% while the last 21 sessions had run at 22%, which made every
+stop and in-the-money probability look three to four times safer than it was. If the
+file is missing, `plan` falls back to the field and says so in `hv_source`.
+
 ## Morning run, ~9:46 ET: 0DTE put
 
 1. Quotes snapshot. SPX ≈ SPY last × `spx_spy_ratio` from state.
@@ -160,7 +168,9 @@ pace backstop. Sales show on the dashboard tape (and in the notification when no
 
 ## Close run, ~4:20 PM ET: stops, settlement, sweep, mark
 
-1. Quotes snapshot. `quotes.json` = `{spy, aapl, sgov, spy_close}` (spy_close = SPY last).
+1. Quotes snapshot. `quotes.json` = `{spy, aapl, sgov, spy_close}` (spy_close = SPY last;
+   `settle` prefers the close of the 5-minute bar ending at 16:00 in `bars.json`, since
+   SPY's last print at ~16:21 can include after-hours trades).
 2. Bars: `get_price_history` SPY, `security_type STK`, `step FIVE_MINS`,
    `outside_rth false`, `period ONE_DAY` (use `TWO_DAYS` if state has an open overnight
    put from the previous session; `THREE_DAYS`/`ONE_WEEK` after weekends or holidays).
@@ -244,6 +254,18 @@ the day's probability space (risk-neutral vs fat-tailed realized distribution, P
 and P(stop) by strike, expected value per contract), crash tables, events and approvals.
 
 ## Model limits worth stating when reporting
+
+- Each strike's implied vol is backed out of its own bid/ask mid with the engine's spot
+  and clock (`iv_source: mid`), so the model reproduces the market at entry. IBKR's IV
+  figure is kept as `iv_ibkr`; fed into this model it under-priced puts by 0.2-0.4% of
+  spot. Strikes with no ask fall back to IBKR's IV (`iv_source: ibkr`).
+- Bids are cleaned before selection and fills: a put never bids more than any put
+  closer to the money (`bid_raw` keeps the quote as received).
+- Stop levels hold each strike's vol at or above its entry vol as the index falls,
+  plus 2 vol points per 1% drop. They used to let the vol slide down the smile, which
+  put the stop roughly twice as far away as it is.
+- The SPX/SPY ratio is recalibrated at each close, so the morning after SPY goes
+  ex-dividend (third Friday of Mar/Jun/Sep/Dec) runs on a ratio about 0.2% stale.
 
 - Option quotes are 15-minute delayed; SPX is derived from SPY.
 - Stops trigger on the option's own traded prices (IBKR 5-minute bars for the

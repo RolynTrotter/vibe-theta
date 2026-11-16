@@ -136,6 +136,77 @@ def check_option_price_stops():
     print("option-price stop checks passed")
 
 
+def check_plan_fixes():
+    """Nov 16 2026 audit: IV from mids, clean bids, sticky-strike stops, realized vol,
+    forced-sale sizing."""
+    import theta as th
+    # IV backed out of a price reproduces that price with the engine's own spot/clock
+    S, K, T = 7423.47, 6700, 24.94 / 8760
+    v = px.implied_vol_put(S, K, T, 0.175)
+    assert v and abs(px.bs_put(S, K, T, v) - 0.175) < 1e-6, v
+    assert px.implied_vol_put(S, K, T, 0.0) is None
+    # realized vol: a 4.5% day in a quiet month must show up
+    closes = [700.0]
+    for r in [0.003, -0.002] * 10:
+        closes.append(closes[-1] * math.exp(r))
+    calm = px.realized_vol(closes)
+    closes[-1] = closes[-2] * math.exp(-0.045)
+    assert px.realized_vol(closes) > 2.5 * calm, (calm, px.realized_vol(closes))
+
+    d = Path(tempfile.mkdtemp())
+    w = lambda name, obj: (d / name).write_text(json.dumps(obj))
+    w("q0.json", {"spy": 750.0, "aapl": 340.0, "sgov": 100.5})
+    run("init", "--quotes", "q0.json", "--now", "2026-11-16T09:40:00-05:00", cwd=d)
+    asof = datetime.fromisoformat("2026-11-16T09:48:00-05:00").astimezone(px.ET)
+    S = 750.0 * 10.02
+    ch = chain(S, asof, asof.date(), 2, 8, step=5)
+    # a stray quote: one far strike bids more than its neighbours closer to the money
+    far = [r for r in ch if r["bid"] == 0.05]
+    stray = far[len(far) // 2]
+    stray["bid"], stray["ask"] = 0.10, 0.15
+    # daily bars with a crash day 7 sessions ago
+    t0 = datetime.fromisoformat("2026-10-15T09:30:00-04:00")
+    cl, times = [760.0], [t0.isoformat()]
+    for i in range(1, 25):
+        cl.append(cl[-1] * math.exp(-0.045 if i == 18 else (0.004 if i % 2 else -0.004)))
+        times.append((t0 + timedelta(days=i)).isoformat())
+    w("spy_daily.json", {"time": times, "close": cl})
+    snap = {"asof": asof.isoformat(), "leg": "0dte_put", "expiry": asof.date().isoformat(),
+            "spy": {"last": 750.0, "prior_close": 756.0, "open": 752.0, "hv30": 0.137, "iv": 0.16},
+            "aapl": {"last": 340.0, "prior_close": 341.0}, "sgov": {"last": 100.5},
+            "chain": ch, "quote_status": "DELAYED"}
+    w("snap.json", snap)
+    run("plan", "--snapshot", "snap.json", "--out", "plan.json", "--final", cwd=d)
+    plan = json.loads((d / "plan.json").read_text())
+    assert plan["hv30"] > 0.15 and "daily closes" in plan["hv_source"], plan["hv_source"]
+    row = next(r for r in plan["rows"] if r["strike"] == stray["strike"])
+    assert row["bid_raw"] == 0.10 and row["bid"] == 0.05, row
+    assert plan["chosen"]["strike"] != stray["strike"], plan["chosen"]
+    c = plan["chosen"]
+    assert c["iv_source"] == "mid" and abs(c["model"] - (c["bid_raw"] + c["ask"]) / 2) < 0.002, c
+    # the strike's vol at the stop level is never below its entry vol
+    sm = px.Smile(plan["spx"], [(plan["spx"] * math.exp(k), v) for k, v in zip(plan["smile"]["k"], plan["smile"]["v"])])
+    assert max(sm.iv(c["strike"], c["stop_spx"]), c["iv"]) >= c["iv"]
+    loose = px.stop_spx_level(c["strike"], plan["hours_left"] / 8760, lambda s_: sm.iv(c["strike"], s_),
+                              c["stop_price"], plan["spx"], 2.0)
+    assert c["stop_spx"] >= loose - 1e-6, (c["stop_spx"], loose)
+
+    # forced sale: selling $D of stock does not cure a $D margin shortfall (it frees
+    # only the stock's 30% margin rate); the old code left two-thirds of the hole open
+    cfg = th.load_config()
+    q = {"spy": 700.0, "aapl": 300.0, "sgov": 100.5}
+    now = datetime.fromisoformat("2026-11-16T16:20:00-05:00").astimezone(px.ET)
+    port = th.new_portfolio("B", False, cfg, 300.0, 100.5, now.date())
+    port["sgov"]["shares"] = 0
+    port["positions"] = [{"status": "open", "kind": "P", "strike": 7900, "qty": 1, "expiry": "2026-11-17",
+                          "entry_iv": 0.3, "leg": "1dte_put"}]
+    st = {"spx_spy_ratio": 10.03, "config": cfg}
+    assert th.margin_req(port, q, st, now, cfg)["excess"] < -40000
+    th.sweep(port, q, st, cfg, now, th.Outbox(str(d / "ob")), "B")
+    assert th.margin_req(port, q, st, now, cfg)["excess"] >= 0 and port["aapl"]["shares"] > 0, port["aapl"]
+    print("plan-fix checks passed")
+
+
 def main():
     d = Path(tempfile.mkdtemp())
     w = lambda name, obj: (d / name).write_text(json.dumps(obj))
@@ -192,6 +263,7 @@ def main():
     check_overnight_sizing(d, w)
     check_calendar_and_health(d)
     check_option_price_stops()
+    check_plan_fixes()
     man = json.loads((d / "outbox" / "manifest.json").read_text())
     print(f"outbox docs: {len(man)}  ({d})")
 

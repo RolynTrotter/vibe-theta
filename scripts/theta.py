@@ -273,11 +273,35 @@ def cmd_plan(a):
     spx, ratio, ratio_src = _snap_spot(snap, state)
     T = px.years_to(expiry, now)
     vdays = px.variance_days(now, expiry)
-    hv = snap["spy"].get("hv30") or 0.15
     kind = leg["kind"]
+    hv, hv_src = _realized(a, snap, now)
 
-    chain = [r for r in snap["chain"] if r.get("iv") and r["iv"] > 0]
-    pts = [(r["strike"], r["iv"]) for r in chain]
+    # Implied vol per strike, backed out of the strike's own bid/ask mid with this
+    # engine's spot and clock. IBKR's IV figure uses its own spot/time convention and
+    # under-prices these puts by 0.2-0.4% of spot when fed back into our model, which
+    # made every downstream number (marks, stops, margin, crash table) too rosy.
+    chain = []
+    for r in snap["chain"]:
+        r = dict(r)
+        r["iv_ibkr"] = r.get("iv")
+        bid, ask = r.get("bid"), r.get("ask")
+        mid = (bid + ask) / 2 if bid is not None and ask and ask > 0 else None
+        fit = px.implied_vol_put(spx, r["strike"], T, mid) if kind == "P" and mid else None
+        r["iv"] = fit if fit else (r.get("iv") if r.get("iv") and r["iv"] > 0 else None)
+        r["iv_source"] = "mid" if fit else ("ibkr" if r["iv"] else None)
+        chain.append(r)
+    # Clean bids: a put can't bid more than any put closer to the money. A stray quote
+    # that breaks this (7105 bidding 0.10 between 7100 and 7115 at 0.05) is not a
+    # price anyone would fill, so selection and fills use the cleaned bid.
+    if kind == "P":
+        floor_ = None
+        for r in sorted(chain, key=lambda r: -r["strike"]):
+            raw = r.get("bid")
+            if raw is not None:
+                floor_ = raw if floor_ is None else min(floor_, raw)
+            r["bid_raw"] = raw
+            r["bid"] = floor_ if raw is not None else raw
+    pts = [(r["strike"], r["iv"]) for r in chain if r["iv"]]
     nearest = min((abs(k / spx - 1) for k, _ in pts), default=1)
     if nearest > 0.005 and snap["spy"].get("iv"):
         # the chain stops short of spot: anchor at-the-money vol with the index's
@@ -291,13 +315,14 @@ def cmd_plan(a):
     sd_hist = px.hist_scale(hv, vdays)
 
     rows = []
-    for r in sorted(snap["chain"], key=lambda r: r["strike"]):
+    for r in sorted(chain, key=lambda r: r["strike"]):
         K = r["strike"]
         iv = r.get("iv") if r.get("iv") and r["iv"] > 0 else smile.iv(K)
         otm = (spx - K) / spx * 100 if kind == "P" else (K - spx) / spx * 100
         bid = r.get("bid") or 0.0
         g = px.put_greeks(spx, K, T, iv) if kind == "P" else None
-        row = {"strike": K, "otm_pct": r2(otm), "bid": bid, "ask": r.get("ask"), "iv": r4(iv),
+        row = {"strike": K, "otm_pct": r2(otm), "bid": bid, "bid_raw": r.get("bid_raw", bid), "ask": r.get("ask"),
+               "iv": r4(iv), "iv_ibkr": r.get("iv_ibkr"), "iv_source": r.get("iv_source") or "smile",
                "contract_id_ex": r.get("contract_id_ex"),
                "model": r4(px.bs_put(spx, K, T, iv) if kind == "P" else px.bs_call(spx, K, T, iv)),
                "p_itm_rn": px.p_itm_rn(spx, K, T, iv, kind),
@@ -307,8 +332,11 @@ def cmd_plan(a):
             row.update({k: r4(v) for k, v in g.items()})
         if bid > 0 and kind == "P":
             stop_px = max(bid * stop_mult, leg.get("stop_min", 0), bid + 2 * tick)
-            # sticky moneyness: as SPX falls the strike's IV moves along today's smile
-            s_star = px.stop_spx_level(K, T, lambda S, K=K: smile.iv(K, S), stop_px, spx, bump)
+            # Sticky strike floor: as SPX falls the strike moves toward the money, where
+            # today's smile is lower, but a put's own vol does not fall in a selloff.
+            # (This used to slide along the smile, which cut the strike's vol from 0.67
+            # to 0.43 on the way down and put the stop twice as far away as it is.)
+            s_star = px.stop_spx_level(K, T, lambda S, K=K, iv=iv: max(smile.iv(K, S), iv), stop_px, spx, bump)
             row["stop_price"] = r2(stop_px)
             row["stop_spx"] = r2(s_star)
             row["stop_drop_pct"] = r2((s_star - spx) / spx * 100)
@@ -406,7 +434,8 @@ def cmd_plan(a):
         "plan_id": f"{now.date().isoformat()}-{leg_name}", "asof": now.isoformat(), "leg": leg_name,
         "kind": kind, "expiry": exp_d.isoformat(), "hours_left": r2(T * px.HOURS_PER_YEAR),
         "variance_days": r4(vdays), "spx": r2(spx), "spy": snap["spy"]["last"], "ratio": r4(ratio),
-        "ratio_source": ratio_src, "hv30": r4(hv), "atm_iv": r4(smile.iv(spx)),
+        "ratio_source": ratio_src, "hv30": r4(hv), "hv_source": hv_src,
+        "hv_ibkr": snap["spy"].get("hv30"), "atm_iv": r4(smile.iv(spx)),
         "quote_status": snap.get("quote_status", "unknown"),
         "smile": {"k": [r4(x) for x in smile.k], "v": [r4(x) for x in smile.v]},
         "rows": rows, "chosen": chosen, "choice_rule": why, "hard_rules_failed": rules,
@@ -429,6 +458,22 @@ def cmd_plan(a):
     print(json.dumps(summary, indent=1))
     if extend:
         sys.exit(3)
+
+
+def _realized(a, snap, now):
+    """Realized vol from SPY's daily closes (IBKR price history), not IBKR's
+    historical_vol field, which read 13.7% on Nov 16 2026 when the last 21 sessions
+    had actually run at 22%."""
+    path = getattr(a, "daily_bars", None)
+    if path and os.path.exists(path):
+        b = load(path)
+        closes = [c for t, c in zip(b["time"], b["close"]) if parse_dt(t).astimezone(px.ET).date() < now.date()]
+        hv = px.realized_vol(closes, snap["spy"].get("last"))
+        if hv:
+            return hv, f"SPY daily closes, last 21 sessions plus today ({len(closes)} closes)"
+    if snap["spy"].get("hv30"):
+        return snap["spy"]["hv30"], "IBKR historical_vol field (known to understate; pass --daily-bars)"
+    return 0.15, "default 15% (no data)"
 
 
 def _words_move(pct):
@@ -747,7 +792,11 @@ def cmd_settle(a):
     comm = cfg["costs"]["commission_per_contract"]
     ob = Outbox(a.outbox)
     log = {}
-    spx_close = (q.get("spy_close") or q["spy"]) * ratio
+    # SPY's regular-session close (the bar ending at 16:00), not its last print at
+    # ~16:21, which can include after-hours trades.
+    rth_close = [b for b in bars if b[1].astimezone(px.ET) == px.expiry_dt(now.date())]
+    spy_close = rth_close[-1][5] if rth_close else (q.get("spy_close") or q["spy"])
+    spx_close = spy_close * ratio
     for k, p in state["portfolios"].items():
         log[k] = []
         for pos in p["positions"]:
@@ -841,10 +890,14 @@ def sweep(p, q, state, cfg, now, ob, k):
             msgs.append(f"sold {take} SPY to cover")
     mr = margin_req(p, q, state, now, cfg)
     if p["cash"] < 0 or mr["excess"] < 0:
-        short = max(-p["cash"], -mr["excess"], 0)
-        n = min(math.ceil(short / q["aapl"]) + 1, p["aapl"]["shares"])
-        p["aapl"]["shares"] -= n
-        p["cash"] += n * q["aapl"]
+        # Selling stock only frees its margin rate (30% when concentrated), not its full
+        # value, so sell in small steps until both cash and margin are whole again.
+        n = 0
+        while (p["cash"] < 0 or margin_req(p, q, state, now, cfg)["excess"] < 0) and p["aapl"]["shares"] > 0:
+            step = min(10, p["aapl"]["shares"])
+            p["aapl"]["shares"] -= step
+            p["cash"] += step * q["aapl"]
+            n += step
         book(p, now.year, "aapl_lt", n * (q["aapl"] - p["aapl"]["basis"]))
         p["aapl_sales"].append({"date": now.date().isoformat(), "shares": n, "price": q["aapl"],
                                 "reason": "FORCED (margin)"})
@@ -1017,6 +1070,8 @@ def main():
     s = sp.add_parser("plan", parents=[common]); s.add_argument("--snapshot", required=True)
     s.add_argument("--out", default="plan.json")
     s.add_argument("--final", action="store_true", help="accept the chain as fetched (IBKR lists nothing further OTM)")
+    s.add_argument("--daily-bars", dest="daily_bars", default="spy_daily.json",
+                   help="IBKR SPY daily price history (THREE_MONTHS) for realized vol")
     s.set_defaults(f=cmd_plan)
     s = sp.add_parser("decide", parents=[common]); s.add_argument("--plan", default="plan.json")
     s.set_defaults(f=cmd_decide)

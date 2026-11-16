@@ -102,6 +102,38 @@ def bs_call(S, K, T, v):
     return bs_put(S, K, T, v) + S - K
 
 
+def implied_vol_put(S, K, T, price, lo=0.005, hi=10.0):
+    """Volatility that makes bs_put(S, K, T, v) equal price, with this module's own
+    spot and clock. None when the price is outside what any volatility can give."""
+    if T <= 0 or price is None:
+        return None
+    floor_, cap = max(K - S, 0.0), K
+    if not (floor_ < price < cap):
+        return None
+    f = lambda v: bs_put(S, K, T, v) - price
+    if f(lo) > 0 or f(hi) < 0:
+        return None
+    for _ in range(100):
+        mid = 0.5 * (lo + hi)
+        if f(mid) > 0:
+            hi = mid
+        else:
+            lo = mid
+    return 0.5 * (lo + hi)
+
+
+def realized_vol(closes, last=None, days=21):
+    """Annualized close-to-close realized vol (root mean square of log returns, 252
+    days) over the last `days` completed sessions, plus today's move so far when
+    `last` is given. Uses the market's own record, not a vendor's summary field."""
+    rets = [math.log(b / a) for a, b in zip(closes, closes[1:]) if a > 0 and b > 0][-days:]
+    if last and closes:
+        rets.append(math.log(last / closes[-1]))
+    if len(rets) < 5:
+        return None
+    return math.sqrt(sum(r * r for r in rets) / len(rets) * 252)
+
+
 def put_greeks(S, K, T, v):
     """Per-share greeks. theta is $/hour, vega is $ per 1 vol point."""
     if T <= 0 or v <= 0:
@@ -184,8 +216,10 @@ def p_touch(S, level, sd_log, below=True, cdf=None):
 def stop_spx_level(K, T, iv_at, stop_price, S0, vol_bump_pts_per_pct):
     """Index level at which the short put's model value reaches the stop price.
 
-    iv_at(S) gives the strike's IV when the index is at S (sticky strike plus a
-    crash bump of vol_bump_pts_per_pct vol points per 1% decline from S0).
+    iv_at(S) gives the strike's IV when the index is at S. Callers must not let it
+    fall below the strike's entry IV on a down move (sticky strike or worse, never
+    sticky moneyness); a crash bump of vol_bump_pts_per_pct vol points per 1%
+    decline from S0 is added here.
     """
     def price_at(S):
         drop_pct = max(0.0, (S0 - S) / S0 * 100.0)
