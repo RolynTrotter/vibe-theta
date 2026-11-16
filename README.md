@@ -5,12 +5,14 @@ selling (0DTE at the open, overnight puts in the last hour), collateralized by
 inherited AAPL that is gradually decumulated into SPY, with a T-bill sleeve sized to
 absorb crash days.
 
-Two portfolios run side by side and differ only in a System One gut check
-([vibe-classification](https://github.com/RolynTrotter/vibe-classification)):
-**A** trades only when the day feels ordinary, **B** always trades.
+**B** sells puts whenever the hard rules pass. **A** was gated by a System One gut
+check ([vibe-classification](https://github.com/RolynTrotter/vibe-classification))
+until 2026-11-16, when the gut check was retired after it vetoed two live runs over an
+11-day-old crash headline. A is now frozen: no new options, same AAPL decumulation and
+T-bill sleeve, so it serves as a no-options baseline.
 
 - `SKILL.md`: the runbook Claude follows for the morning, afternoon and close runs
-- `scripts/theta.py`: the engine (planning, gating, paper fills, stop simulation,
+- `scripts/theta.py`: the engine (planning, decisions, paper fills, stop simulation,
   settlement, decumulation, approval staging)
 - `scripts/pricing.py`: Black-Scholes, smile, fat-tailed realized-vol probabilities
 - `dashboard/index.html`: the Theta Desk page (tickets, approvals, probability space)

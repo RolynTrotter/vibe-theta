@@ -153,21 +153,13 @@ def main():
             "chain": chain(S, asof, exp, 3, 20), "quote_status": "DELAYED"}
     w("snap1.json", snap)
     print(run("plan", "--snapshot", "snap1.json", "--out", "plan1.json", cwd=d))
-    w("jev_ok.json", [{"id": "x", "answers": {"ok": {"type": "noul", "noul": 0.66}}}])
-    # headline veto: market check passes, one headline scores as a shock
-    print(run("jev-input", "--plan", "plan1.json", "--events", "Nothing major.",
-              "--headline", "Record highs again", "--headline", "China launches amphibious assault on Taiwan", cwd=d))
-    w("jev_hl.json", [{"id": "h1", "answers": {"shock": {"type": "noul", "noul": 0.1}}},
-                      {"id": "h2", "answers": {"shock": {"type": "noul", "noul": 0.88}}}])
-    out = run("gate", "--plan", "plan1.json", "--jev", "jev_ok.json", "--jev-headlines", "jev_hl.json",
-              "--headline", "Record highs again", "--headline", "China launches amphibious assault on Taiwan", cwd=d)
-    g = json.loads(out)
-    assert g["decisions"]["A"]["trade"] is False and "headline veto" in g["decisions"]["A"]["reason"], g
-    assert g["decisions"]["B"]["trade"] is True
-    # all calm: both trade
-    w("jev_hl.json", [{"id": "h1", "answers": {"shock": {"type": "noul", "noul": 0.1}}}])
-    print(run("gate", "--plan", "plan1.json", "--jev", "jev_ok.json", "--jev-headlines", "jev_hl.json",
-              "--headline", "Record highs again", cwd=d))
+    # no gut check: B trades on the hard rules, frozen A takes no new options
+    g = json.loads(run("decide", "--plan", "plan1.json", cwd=d))
+    assert g["decisions"]["B"]["trade"] is True, g
+    assert g["decisions"]["A"]["trade"] is False and g["decisions"]["A"].get("frozen"), g
+    for gone in ("gate", "jev-input"):
+        r = subprocess.run(THETA + [gone], cwd=d, capture_output=True, text=True)
+        assert r.returncode != 0, f"{gone} should no longer exist"
     print(run("fill", "--plan", "plan1.json", cwd=d))
     print(run("decum", "--snapshot", "snap1.json", cwd=d))
 
@@ -176,14 +168,13 @@ def main():
     w("q1.json", {"spy": 774.4, "aapl": aapl, "sgov": sgov})
     print(run("settle", "--quotes", "q1.json", "--bars", "b1.json", "--now", "2026-10-05T16:20:00-04:00", cwd=d))
 
-    # next morning: 0DTE plan, gut check says no -> only B trades
+    # next morning: 0DTE plan, only B trades
     asof2 = datetime.fromisoformat("2026-10-06T09:45:00-04:00").astimezone(px.ET)
     snap2 = dict(snap, asof=asof2.isoformat(), leg="0dte_put", expiry="2026-10-06",
                  chain=chain(S, asof2, asof2.date(), 1, 12))
     w("snap2.json", snap2)
     print(run("plan", "--snapshot", "snap2.json", "--out", "plan2.json", cwd=d))
-    w("jev_no.json", [{"id": "x", "answers": {"ok": {"type": "noul", "noul": 0.2}}}])
-    print(run("gate", "--plan", "plan2.json", "--jev", "jev_no.json", cwd=d))
+    print(run("decide", "--plan", "plan2.json", cwd=d))
     print(run("link", "--plan", "plan2.json", cwd=d))
     print(run("fill", "--plan", "plan2.json", cwd=d))
     print(run("stage", "--plan", "plan2.json", "--mode", "test", cwd=d))

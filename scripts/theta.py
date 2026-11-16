@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""vibe-theta engine: plan, gate, fill, decumulate, settle and stage far-OTM SPX
-option trades for two paper portfolios (A = gut-checked, B = always).
+"""vibe-theta engine: plan, decide, fill, decumulate, settle and stage far-OTM SPX
+option trades for two paper portfolios. B sells puts whenever the hard rules pass.
+A was gated by a System One gut check until 2026-11-16; the gut check is retired
+and A is frozen: it sells no new options but still settles, decumulates and earns
+the sleeve yield, as a no-options baseline.
 
-Everything that talks to IBKR, the classifier or the dashboard is done by
+Everything that talks to IBKR or the dashboard is done by
 Claude following SKILL.md; this script only does arithmetic on JSON files.
 Every command that changes something writes database documents to an
 outbox directory plus outbox/manifest.json, which Claude sends to the
@@ -11,7 +14,7 @@ dashboard in one ArtifactData batch.
 Commands
   init     create state from starting quotes
   plan     read a chain snapshot, pick strikes, size, compute probability space
-  gate     attach the classifier result and decide per portfolio
+  decide   decide per portfolio from the hard rules (and which portfolios still sell options)
   fill     paper-fill the plan into each portfolio
   decum    AAPL decumulation (down-day tranches, crash tranches, pace backstop)
   settle   simulate stops through price bars, settle expiries, sweep cash, mark
@@ -473,55 +476,32 @@ def _require_full_chain(plan):
         sys.exit("plan needs a wider chain first: " + json.dumps(plan["extend"]))
 
 
-def cmd_gate(a):
+def portfolio_rules():
+    """Which portfolios still sell options comes from the repo config, not the stored state."""
+    return load_config(ROOT / "config.local.json")["portfolios"]
+
+
+def cmd_decide(a):
+    """Per-portfolio trade decisions from the hard rules alone. There is no gut check
+    (retired 2026-11-16 after it was fed week-old headlines); a portfolio whose repo
+    config says `sells_options: false` takes no new options."""
     plan = load(a.plan)
     _require_full_chain(plan)
     state = load(a.state)
-    cfg = state["config"]
-    g = gate_config()
-    notes = []
-    p_ok = None
-    if a.jev:
-        res = load(a.jev)
-        p_ok = _answer(res[0] if isinstance(res, list) else res, "ok")
-    if p_ok is None:
-        notes.append("market check unavailable: treated as reject")
-    hs = _headline_list(a)
-    scored = []
-    if hs:
-        res = load(a.jev_headlines) if a.jev_headlines and os.path.exists(a.jev_headlines) else []
-        by_id = {r.get("id"): _answer(r, "shock") for r in res}
-        for i, h in enumerate(hs):
-            sc = by_id.get(f"h{i + 1}")
-            scored.append({"text": h, "shock": sc, "veto": sc is None or sc >= g["shock_veto"]})
-        if any(x["shock"] is None for x in scored):
-            notes.append("headline check unavailable: treated as veto")
-    else:
-        notes.append("no headlines were checked")
-    vetoes = [x for x in scored if x["veto"]]
-    market_ok = p_ok is not None and p_ok >= g["threshold"]
-    plan["gate"] = {"p_ok": p_ok, "threshold": g["threshold"], "market_ok": market_ok,
-                    "headline_scores": scored, "shock_veto": g["shock_veto"],
-                    "max_shock": max((x["shock"] for x in scored if x["shock"] is not None), default=None),
-                    "pass": market_ok and not vetoes,
-                    "events": a.events, "headlines": " | ".join(hs),
-                    "note": "; ".join(notes) or None}
-    if not market_ok:
-        why = f"gut check said no (market p={p_ok})"
-    elif vetoes:
-        v = max(vetoes, key=lambda x: x["shock"] if x["shock"] is not None else 2)
-        why = f"headline veto: \"{v['text']}\" (shock {v['shock']})"
-    else:
-        why = None
+    rules = portfolio_rules()
+    plan["gate"] = {"retired": True, "pass": True,
+                    "note": "no gut check: retired 2026-11-16; decisions use the hard rules only"}
     for k, p in state["portfolios"].items():
-        if plan["hard_rules_failed"]:
+        pr = rules.get(k, {})
+        if pr.get("sells_options") is False:
+            d = {"trade": False, "frozen": True,
+                 "reason": f"frozen: no new options since {pr.get('frozen_since', 'the gut check was retired')}"}
+        elif plan["hard_rules_failed"]:
             d = {"trade": False, "reason": "; ".join(plan["hard_rules_failed"])}
         elif plan["sizing"].get(k, {}).get("qty", 0) == 0:
             d = {"trade": False, "reason": plan["sizing"].get(k, {}).get("note", "size 0")}
-        elif p["uses_gate"] and not plan["gate"]["pass"]:
-            d = {"trade": False, "reason": why}
         else:
-            d = {"trade": True, "reason": "rules pass" + (" and gut check passed" if p["uses_gate"] else "")}
+            d = {"trade": True, "reason": "rules pass"}
         plan["decisions"][k] = d
     dump(plan, a.plan)
     if a.outbox:
@@ -529,12 +509,12 @@ def cmd_gate(a):
         ob.put("plans", plan["plan_id"], plan)
         ob.save()
     want = load_config(ROOT / "config.local.json").get("approvals", {}).get("stage_ibkr", "off")
-    passed = plan["gate"]["pass"] and not plan["hard_rules_failed"]
+    passed = not plan["hard_rules_failed"]
     nxt = (f"plan passed: stage_ibkr={want}. Run `stage --mode {want}`, create the IBKR instruction, "
            "then `link --instruction-id ... --ibkr-url ...`") if passed and want != "off" else \
           ("plan passed: run `link --dashboard ...` (no IBKR staging)" if passed else
            "plan did not pass: run `link` with no links; notification without click-through")
-    print(json.dumps({"gate": plan["gate"], "decisions": plan["decisions"], "approval_next": nxt}, indent=1))
+    print(json.dumps({"decisions": plan["decisions"], "approval_next": nxt}, indent=1))
 
 
 def cmd_fill(a):
@@ -547,11 +527,17 @@ def cmd_fill(a):
     comm = cfg["costs"]["commission_per_contract"]
     c = plan["chosen"]
     leg = cfg["legs"][plan["leg"]]
+    names = portfolio_rules()
     for k, p in state["portfolios"].items():
+        p["name"] = names.get(k, {}).get("name", p["name"])
+        p["uses_gate"] = False
         d = plan["decisions"].get(k, {})
         if not d.get("trade"):
-            key = "skipped_gate" if ("gut check" in d.get("reason", "") or "headline veto" in d.get("reason", "")) else "skipped_rules"
-            p["counts"][key] += 1
+            if d.get("frozen"):
+                p["counts"]["frozen"] = p["counts"].get("frozen", 0) + 1
+            else:
+                key = "skipped_gate" if ("gut check" in d.get("reason", "") or "headline veto" in d.get("reason", "")) else "skipped_rules"
+                p["counts"][key] = p["counts"].get(key, 0) + 1
             continue
         qty = plan["sizing"][k]["qty"]
         price = c["bid"]
@@ -900,39 +886,6 @@ def cmd_report(a):
             print(f"   {y}: {r}")
 
 
-def gate_config():
-    """Gate wording and thresholds come from the repo config, not the stored state."""
-    return load_config(ROOT / "config.local.json")["gate"]
-
-
-def _headline_list(a):
-    hs = list(a.headline or [])
-    if a.headlines:
-        hs += [h.strip() for h in a.headlines.split(" | ")]
-    return [h for h in hs if h]
-
-
-def cmd_jev_input(a):
-    """Write two classifier requests: the market brief (one question) and the
-    headlines (each scored on its own for crash potential)."""
-    plan = load(a.plan)
-    g = gate_config()
-    session = "afternoon" if plan["leg"].startswith("1dte") else "morning"
-    text = plan["brief"]
-    if a.events:
-        text += " Scheduled before expiry: " + a.events.strip().rstrip(".") + "."
-    market = {"ask": {"ok": {"q": g["question"].format(session=session), "yes": g["yes"], "no": g["no"]}},
-              "items": [{"id": plan["plan_id"], "text": text}], "show": "json"}
-    dump(market, a.out)
-    hs = _headline_list(a)
-    if hs:
-        dump({"ask": {"shock": {"q": g["shock_question"], "yes": g["shock_yes"], "no": g["shock_no"]}},
-              "items": [{"id": f"h{i + 1}", "text": h} for i, h in enumerate(hs)], "show": "json"},
-             a.out_headlines)
-    print(json.dumps({"market_text": text, "headlines": hs,
-                      "files": [a.out] + ([a.out_headlines] if hs else [])}, indent=1))
-
-
 def cmd_link(a):
     """Record the approval links (or their absence) on the plan."""
     plan = load(a.plan)
@@ -1065,11 +1018,8 @@ def main():
     s.add_argument("--out", default="plan.json")
     s.add_argument("--final", action="store_true", help="accept the chain as fetched (IBKR lists nothing further OTM)")
     s.set_defaults(f=cmd_plan)
-    s = sp.add_parser("gate", parents=[common]); s.add_argument("--plan", default="plan.json")
-    s.add_argument("--jev"); s.add_argument("--jev-headlines", dest="jev_headlines", default="jev_headlines.json")
-    s.add_argument("--events", default=""); s.add_argument("--headlines", default="")
-    s.add_argument("--headline", action="append")
-    s.set_defaults(f=cmd_gate)
+    s = sp.add_parser("decide", parents=[common]); s.add_argument("--plan", default="plan.json")
+    s.set_defaults(f=cmd_decide)
     s = sp.add_parser("fill", parents=[common]); s.add_argument("--plan", default="plan.json"); s.set_defaults(f=cmd_fill)
     s = sp.add_parser("decum", parents=[common]); s.add_argument("--snapshot", required=True); s.set_defaults(f=cmd_decum)
     s = sp.add_parser("settle", parents=[common]); s.add_argument("--quotes", required=True)
@@ -1078,15 +1028,9 @@ def main():
                    help="folder of IBKR price-history files, one per open position, named <position id>.json")
     s.set_defaults(f=cmd_settle)
     s = sp.add_parser("stage", parents=[common]); s.add_argument("--plan", default="plan.json")
-    s.add_argument("--mode", choices=["test", "live"], default="test"); s.add_argument("--portfolio", default="A")
+    s.add_argument("--mode", choices=["test", "live"], default="test"); s.add_argument("--portfolio", default="B")
     s.set_defaults(f=cmd_stage)
     s = sp.add_parser("report", parents=[common]); s.set_defaults(f=cmd_report)
-    s = sp.add_parser("jev-input", parents=[common]); s.add_argument("--plan", default="plan.json")
-    s.add_argument("--events", default=""); s.add_argument("--headlines", default="")
-    s.add_argument("--headline", action="append")
-    s.add_argument("--out", default="jev_in.json")
-    s.add_argument("--out-headlines", dest="out_headlines", default="jev_in_headlines.json")
-    s.set_defaults(f=cmd_jev_input)
     s = sp.add_parser("link", parents=[common]); s.add_argument("--plan", default="plan.json")
     s.add_argument("--dashboard"); s.add_argument("--ibkr-url", dest="ibkr_url")
     s.add_argument("--instruction-id", dest="instruction_id"); s.add_argument("--staging")

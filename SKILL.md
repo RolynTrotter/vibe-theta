@@ -1,23 +1,29 @@
 ---
 name: vibe-theta
-description: Runs the far-OTM SPX theta-harvest experiment (ERN-style 0DTE and overnight short puts, AAPL decumulation into SPY, T-bill sleeve) for two paper portfolios, one gated by a System One gut check. Use for the scheduled morning, afternoon and close runs, to test the approval pipeline, or when asked how the theta experiment is doing.
+description: Runs the far-OTM SPX theta-harvest experiment (ERN-style 0DTE and overnight short puts, AAPL decumulation into SPY, T-bill sleeve) for two paper portfolios: B sells puts on the hard rules alone, A is a frozen no-options baseline. Use for the scheduled morning, afternoon and close runs, to test the approval pipeline, or when asked how the theta experiment is doing.
 ---
 
 # vibe-theta
 
-Paper-trades Early Retirement Now's short-dated SPX put selling in two portfolios that
-differ only in the gut check:
+Paper-trades Early Retirement Now's short-dated SPX put selling in two portfolios:
 
-- **A, Gut-checked**: trades only when the Jev classifier says the market looks ordinary
-  and no headline scores as a likely next-day crash.
-- **B, Always**: trades whenever the hard rules pass.
+- **B, Always**: sells puts whenever the hard rules pass.
+- **A, No options** (frozen since 2026-11-16): sells no new options, but still settles
+  what it held, decumulates AAPL on the same rules and earns the sleeve yield, so it
+  is the no-options baseline for B.
+
+**There is no gut check.** Until 2026-11-16, A was gated by a System One (Jev)
+classifier fed headlines from web search. The headlines had no publish dates, and two
+live runs in a row vetoed trades over an 11-day-old crash story, so the gut check was
+removed. Do not search for news, call Jev or any classifier, or let headlines affect a
+decision. Old plans on the dashboard keep their gut-check records as history.
 
 Both start with 900 AAPL (stepped-up basis = starting price unless `config.local.json`
 says otherwise) plus a $50k T-bill sleeve (SGOV), about $350k. Both sell AAPL on the
 same decumulation rules and sweep cash to the sleeve, then SPY.
 
 The engine (`scripts/theta.py`) only does arithmetic on JSON files. You do the data
-gathering (IBKR connector), the gut check (vibe-classification), the dashboard writes
+gathering (IBKR connector), the dashboard writes
 (ArtifactData) and the notifications.
 
 **Never place or submit a live order.** The built-in IBKR connector can only create
@@ -132,36 +138,19 @@ Map to `spy: {last, prior_close, open, iv (annual_iv), hv30, iv_pctile_52w (52-w
      further out than the chain you fetched. Call `get_option_data` for that
      `min_strike`–`max_strike` range, snapshot those puts (every 25 points), append them
      to the chain and re-run `plan`. Repeat until it exits 0. Only if IBKR lists no lower
-     strikes at all, re-run with `--final`. `gate` and `fill` refuse a plan that still
+     strikes at all, re-run with `--final`. `decide` and `fill` refuse a plan that still
      needs extending, so this step cannot be skipped.
-6. Gut check inputs: WebSearch for the US economic calendar between now and the
-   option's expiry (Fed decision, CPI, PPI, jobs report, major index-moving earnings),
-   and for the top market and world news right now. Write one plain sentence of
-   scheduled events. Collect 3 to 6 headlines, copied as they appear in the search
-   results (trim site names, don't reword or add commentary). Never pass the plan's
-   numbers or decisions to Jev beyond what `jev-input` builds.
-7. `python3 scripts/theta.py jev-input --plan plan.json --events "..." --headline "..." --headline "..."`
-   writes two requests. Run both:
-   `python3 /mnt/skills/plugins/vibe-classification/scripts/jev.py < jev_in.json > jev.json`
-   `python3 /mnt/skills/plugins/vibe-classification/scripts/jev.py < jev_in_headlines.json > jev_headlines.json`
-   - `jev_in.json` asks one question about the market brief plus scheduled events.
-   - `jev_in_headlines.json` scores each headline on its own: could this event make
-     US stocks fall sharply within a day? Any headline at or above `shock_veto` (0.7)
-     vetoes the gut-checked portfolio.
-   If a Jev call fails, still run `gate`: a missing market answer is a reject, and a
-   missing headline answer is a veto. The notification says why.
-8. `python3 scripts/theta.py gate --plan plan.json --jev jev.json --jev-headlines jev_headlines.json --events "..." --headline "..." --headline "..."`
-   (the same events and headlines as step 7, in the same order).
-9. `python3 scripts/theta.py fill --plan plan.json --state-version V` (paper fills, both portfolios).
-10. Approval pipeline (below), `health --status ok`, then send the outbox, then notify only if
+6. `python3 scripts/theta.py decide --plan plan.json --state-version V`
+   (hard rules only; A is frozen and takes no new options).
+7. `python3 scripts/theta.py fill --plan plan.json --state-version V` (paper fills; only B opens a position).
+8. Approval pipeline (below), `health --status ok`, then send the outbox, then notify only if
     `notify.enabled` is true (see Notifications).
 
 ## Afternoon run, ~3:01 PM ET: overnight put + AAPL decumulation
 
 Same as the morning run with `leg: "1dte_put"`, expiry = the next SPXW expiration after
 today, `min_strike` = SPX × 0.85, `max_strike` = SPX × 0.97, sampling every 50 points
-instead of 25 (refine fills in around the pick). Refresh the gut check with
-afternoon headlines. After `fill`:
+instead of 25 (refine fills in around the pick). After `fill`:
 
 `python3 scripts/theta.py decum --snapshot snapshot.json --state-version V`
 
@@ -202,9 +191,8 @@ pace backstop. Sales show on the dashboard tape (and in the notification when no
 
 ## Approval pipeline
 
-The click-through exists only when the plan passes: hard rules passed and, for the
-gut-checked portfolio, Jev passed. A rejected day still gets a notification, but with
-no links, so acting on it takes deliberate effort.
+The click-through exists only when the plan passes the hard rules. A rejected day still
+gets a notification, but with no links, so acting on it takes deliberate effort.
 
 When the plan passes:
 1. Staging (`approvals.stage_ibkr` in the repo config; currently `off`, so no IBKR
@@ -215,13 +203,13 @@ When the plan passes:
      put (about $6). It exercises the real path (contract, deep link, approval) without
      risk. Keep the URL and id from the result.
    - `live` (only when `state.mode` is `live` AND Rolyn has switched it on in chat):
-     same with `--mode live --portfolio A`; the message must also give the stop-limit
+     same with `--mode live --portfolio B`; the message must also give the stop-limit
      to attach (`stop_to_attach`) and suggest a `create_alert` at `alert_spx_level`.
    - `off`: no IBKR instruction.
 2. `python3 scripts/theta.py link --plan plan.json --dashboard "<dashboard_url>#<plan_id>" --ibkr-url "<url>" --instruction-id "<id>"`
 
    `link` reads `stage_ibkr` from the repo config and refuses to record a passed
-   plan without an instruction id when staging is on. Do not skip staging; `gate`
+   plan without an instruction id when staging is on. Do not skip staging; `decide`
    prints the exact next step as `approval_next`.
 
 When it does not pass: `python3 scripts/theta.py link --plan plan.json` (records
@@ -238,8 +226,8 @@ failed run: it always records health and sends one `PushNotification`
 
 When `notify.enabled` is true:
 1. `PushNotification` (under 200 characters), for example:
-   `Theta 0DTE: sell 7450P @0.10 (4.0% OTM), gut 0.66 OK. Approve in session.` or
-   `Theta 0DTE: gut check says NO (0.18), A sits out, B sold 7450P.`
+   `Theta 0DTE: B sold 7450P @0.10 (4.0% OTM). Approve in session.` or
+   `Theta 0DTE: hard rule failed (premium too thin), no trade.`
 2. Then a `SendUserMessage` with the same facts plus, **only when the plan passed**, the
    dashboard link and the IBKR instruction link. On reject days include the reason and
    no links.
@@ -251,7 +239,7 @@ Quotes snapshot, then `python3 scripts/theta.py init --quotes q.json` with
 
 ## Reading the results
 
-`python3 scripts/theta.py report`, or open the dashboard: equity curves for A and B,
+`python3 scripts/theta.py report`, or open the dashboard: equity curves for A (frozen) and B,
 the day's probability space (risk-neutral vs fat-tailed realized distribution, P(ITM)
 and P(stop) by strike, expected value per contract), crash tables, events and approvals.
 

@@ -6,12 +6,16 @@
   },
   "portfolios": {
     "A": {
-      "name": "Gut-checked",
-      "uses_gate": true
+      "name": "No options",
+      "uses_gate": false,
+      "sells_options": false,
+      "frozen_since": "2026-11-16",
+      "history": "Gut-checked by a System One classifier until 2026-11-16; frozen after the gut check was found scoring week-old headlines."
     },
     "B": {
       "name": "Always",
-      "uses_gate": false
+      "uses_gate": false,
+      "sells_options": true
     }
   },
   "legs": {
@@ -63,17 +67,6 @@
   },
   "stops": {
     "vol_bump_pts_per_pct": 2.0
-  },
-  "gate": {
-    "note": "Gate settings are read from the repo config at run time, not from the stored state, so wording changes apply on the next run.",
-    "threshold": 0.5,
-    "question": "Is this an ordinary {session} on which it is reasonable to sell far out-of-the-money S&P 500 index puts?",
-    "yes": "nothing unusual: normal volatility for the times and no major scheduled shock before the option expires",
-    "no": "something is off: unusual fear or volatility, a large gap, or a major scheduled shock (Fed decision, CPI, jobs report) before the option expires",
-    "shock_question": "Could the event in this headline plausibly make the US stock market fall sharply within the next day?",
-    "shock_yes": "a war, disaster, financial crisis or market breakdown that could hit US stocks hard and fast",
-    "shock_no": "routine news, or a problem too slow or too local to move the whole market within a day",
-    "shock_veto": 0.7
   },
   "sleeve": {
     "target_usd": 75000

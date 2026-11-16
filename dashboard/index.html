@@ -109,7 +109,7 @@ td.bad { color: var(--bad); } td.good { color: var(--good); }
   <header>
     <div>
       <h1>Theta Desk</h1>
-      <div class="sub" id="asof">Paper experiment: far out-of-the-money SPX puts, gut-checked vs always.</div>
+      <div class="sub" id="asof">Paper experiment: far out-of-the-money SPX puts (B) vs a no-options baseline (A, gut-checked until Nov 16).</div>
     </div>
     <div class="row">
       <span class="chip" id="mode-chip">paper</span>
@@ -128,7 +128,7 @@ td.bad { color: var(--bad); } td.good { color: var(--good); }
     <h2>Portfolios</h2>
     <div class="grid2" id="ports"><div class="empty">Waiting for the first state snapshot.</div></div>
     <div style="margin-top:16px">
-      <div class="legend"><span><i style="background:var(--series-a)"></i>A · Gut-checked</span><span><i style="background:var(--series-b)"></i>B · Always</span></div>
+      <div class="legend"><span><i style="background:var(--series-a)"></i>A · No options (gut-checked until Nov 16)</span><span><i style="background:var(--series-b)"></i>B · Always</span></div>
       <div class="chart-box"><canvas id="equity" aria-label="Net liquidation value of both portfolios over time" role="img"></canvas></div>
     </div>
   </section>
@@ -213,7 +213,7 @@ td.bad { color: var(--bad); } td.good { color: var(--good); }
     const g = p.gate || {};
     const passed = p.approval && p.approval.gate_pass;
     const marketOk = g.market_ok != null ? g.market_ok : g.pass;
-    const gateChip = g.p_ok == null ? '<span class="chip bad"><span class="dot"></span>market check unavailable</span>'
+    const gateChip = g.retired ? "" : g.p_ok == null ? '<span class="chip bad"><span class="dot"></span>market check unavailable</span>'
       : `<span class="chip ${marketOk ? "good" : "bad"}"><span class="dot"></span>market ${g.p_ok.toFixed(2)} · ${marketOk ? "ok" : "no"}</span>`;
     const hs = g.headline_scores || [];
     const vetoN = hs.filter((x) => x.veto).length;
@@ -223,13 +223,13 @@ td.bad { color: var(--bad); } td.good { color: var(--good); }
     const rules = (p.hard_rules_failed || []).length
       ? `<span class="chip bad"><span class="dot"></span>${esc(p.hard_rules_failed[0])}</span>` : '<span class="chip good"><span class="dot"></span>rules pass</span>';
     const dec = Object.entries(p.decisions || {}).map(([k, d]) =>
-      `<span class="chip ${d.trade ? "good" : ""}">${k}: ${d.trade ? "sold " + ((p.fills || {})[k] || {}).qty + "×" : "sat out"}</span>`).join("");
+      `<span class="chip ${d.trade ? "good" : ""}">${k}: ${d.trade ? "sold " + ((p.fills || {})[k] || {}).qty + "×" : d.frozen ? "frozen" : "sat out"}</span>`).join("");
     const a = S.approvals[p.plan_id];
     let approval;
     if (!p.approval) {
       approval = "";
     } else if (!passed) {
-      approval = `<div class="approval"><span class="sub">No approval link today: ${esc(g.pass ? "a hard rule failed" : !marketOk ? "the market check said no" : "a headline vetoed the trade")}. Portfolio B still traded on paper.</span></div>`;
+      approval = `<div class="approval"><span class="sub">No approval link today: ${esc(g.retired || g.pass ? "a hard rule failed" : !marketOk ? "the market check said no" : "a headline vetoed the trade")}.${g.retired ? "" : " Portfolio B still traded on paper."}</span></div>`;
     } else {
       const ibkr = p.approval.ibkr_url ? `<a class="btn" href="${esc(p.approval.ibkr_url)}" target="_blank" rel="noopener">Open IBKR instruction${p.approval.staging === "test" ? " (test)" : ""}</a>` : "";
       const done = a ? `<span class="chip ${a.decision === "approve" ? "good" : "bad"}">${a.decision === "approve" ? "approved" : "passed"} ${new Date(a.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}</span>` : "";
@@ -302,7 +302,7 @@ td.bad { color: var(--bad); } td.good { color: var(--good); }
           <div><span>Margin room</span><b>${m.margin_excess_pct != null ? m.margin_excess_pct.toFixed(0) + "%" : "–"}</b></div>
           <div><span>Trades</span><b>${p.counts.trades}</b></div>
           <div><span>Stops</span><b>${p.counts.stops}</b></div>
-          <div><span>Sat out</span><b>${p.counts.skipped_gate + p.counts.skipped_rules}</b></div>
+          <div><span>${p.counts.frozen ? "Sat out / frozen" : "Sat out"}</span><b>${(p.counts.skipped_gate || 0) + (p.counts.skipped_rules || 0)}${p.counts.frozen ? " / " + p.counts.frozen : ""}</b></div>
           <div><span>Open shorts</span><b>${open.length ? open.map((x) => x.strike + "P×" + x.qty).join(", ") : "none"}</b></div>
         </div>
       </div>`;
@@ -348,7 +348,7 @@ td.bad { color: var(--bad); } td.good { color: var(--good); }
     if (!S.history.length) return;
     const labels = S.history.map((h) => h.date);
     const ds = ["A", "B"].map((k) => ({
-      label: k === "A" ? "A · Gut-checked" : "B · Always",
+      label: k === "A" ? "A · No options (gut-checked until Nov 16)" : "B · Always",
       data: S.history.map((h) => h.portfolios[k] ? h.portfolios[k].nlv : null),
       borderColor: css(k === "A" ? "--series-a" : "--series-b"), backgroundColor: css(k === "A" ? "--series-a" : "--series-b"),
       borderWidth: 2, pointRadius: S.history.length < 25 ? 3 : 0, pointHoverRadius: 5, tension: 0,
